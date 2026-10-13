@@ -6,7 +6,7 @@
 "use strict";
 const BF = (window.BF = window.BF || {});
 
-const N = 16384;                 // columns along a face edge; the equator is 4N blocks around
+const N = 163840;                // columns along a face edge; the equator is 4N blocks around
 const R = (2 * N) / Math.PI;     // sea-level radius, so a column at a face centre is one block wide
 const SEA = 96, H = 320;         // sea level layer and world height in layers
 const Q = Math.PI / 4;
@@ -81,5 +81,14 @@ function frame(f, u, v, y, out) {
   return out;
 }
 
-BF.planet = { N, R, SEA, H, FACES, dir, fromDir, pos, wrap, frame };
+// 3D tangent vector to grid steps (du, dv) in a local frame: least squares against the grid axes,
+// which are not quite perpendicular away from face centres.
+function toGrid(d, fr) {
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const a = dot(fr.eu, fr.eu), b = dot(fr.eu, fr.ev), c = dot(fr.ev, fr.ev);
+  const x = dot(d, fr.eu), y = dot(d, fr.ev), det = a * c - b * b;
+  return [(c * x - b * y) / det, (a * y - b * x) / det];
+}
+
+BF.planet = { toGrid, N, R, SEA, H, FACES, dir, fromDir, pos, wrap, frame };
 })();

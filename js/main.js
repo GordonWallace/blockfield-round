@@ -2,7 +2,7 @@
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
-const P = BF.planet, B = BF.B, world = BF.world, player = BF.player;
+const P = BF.planet, B = BF.B, world = BF.world, player = BF.player, mobs = BF.mobs;
 const $ = (id) => document.getElementById(id);
 const SKY = 0x8fbde8;
 
@@ -13,6 +13,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(SKY);
 scene.fog = new THREE.Fog(SKY, 80, 120);
 const camera = new THREE.PerspectiveCamera(75, 1, 0.05, 1000);
+mobs.init(scene);
 
 // selection outline
 const outline = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x000000 }));
@@ -61,10 +62,18 @@ function start() {
   world.init(scene, seed);
   map.built = false;
   spawn();
+  mobs.clear();
+  flock(8, 10);
   player.travelled = 0;
   started = true;
   $("title").style.display = "none";
   renderer.domElement.requestPointerLock();
+}
+
+// A few sheep scattered within r blocks of the player.
+function flock(n, r) {
+  for (let k = 0, made = 0; k < n * 6 && made < n; k++)
+    if (mobs.spawnSheep(player.f, player.u + (Math.random() * 2 - 1) * r, player.v + (Math.random() * 2 - 1) * r)) made++;
 }
 
 // ---- input ----
@@ -74,6 +83,8 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyF") { player.flying = !player.flying; player.vy = 0; }
   if (e.code === "KeyG") player.fast = !player.fast;
   if (e.code === "KeyM") toggleMap();
+  if (e.code === "KeyK") flock(4, 6);
+  if (e.code === "KeyL") mobs.lure = !mobs.lure;
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 500; i++) { const d = [n.hash(i, 1) * 2 - 1, n.hash(i, 2) * 2 - 1, n.hash(i, 3) * 2 - 1]; if (landAt(d)) { goTo(d); break; } } }
   if (e.code === "Equal" || e.code === "NumpadAdd") setView(Math.min(24, world.viewDist + 2));
   if (e.code === "Minus" || e.code === "NumpadSubtract") setView(Math.max(4, world.viewDist - 2));
@@ -180,6 +191,7 @@ function frame(now) {
     return;
   }
   player.update(dt);
+  mobs.update(dt, player);
   const st = world.update(player.f, player.u, player.v, player.eye);
   camera.position.set(0, 0, 0);
   camera.up.set(...player.up);
@@ -208,6 +220,7 @@ function hud(st) {
   $("hud").textContent =
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${Math.floor(player.y)} (sea ${P.SEA})  ·  ${mode}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  travelled ${Math.round(player.travelled)} of ${4 * P.N} around\n` +
+    `${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
     `${fps} fps  ·  view ${world.viewDist} chunks  ·  ${st.meshed}/${st.wanted} chunks meshed`;
 }
 

@@ -249,4 +249,13 @@ world.reset = function () {
 };
 
 world.solid = solid;
+
+// Does a box of half-width hw and height ht with its feet centred at (u, v, y) on face f touch a solid block?
+world.boxHits = function (f, u, v, y, hw, ht) {
+  for (let i = Math.floor(u - hw); i <= Math.floor(u + hw - 1e-6); i++)
+    for (let j = Math.floor(v - hw); j <= Math.floor(v + hw - 1e-6); j++)
+      for (let k = Math.floor(y); k <= Math.floor(y + ht - 1e-6); k++)
+        if (solid(world.get(f, i, j, k))) return true;
+  return false;
+};
 })();

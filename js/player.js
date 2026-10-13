@@ -16,20 +16,9 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
-// 3D tangent vector to grid steps (du, dv): least squares against the local grid axes.
-function toGrid(d, fr) {
-  const a = dot(fr.eu, fr.eu), b = dot(fr.eu, fr.ev), c = dot(fr.ev, fr.ev);
-  const x = dot(d, fr.eu), y = dot(d, fr.ev), det = a * c - b * b;
-  return [(c * x - b * y) / det, (a * y - b * x) / det];
-}
+const toGrid = P.toGrid;
 
-function collides(u, v, y) {
-  for (let i = Math.floor(u - HW); i <= Math.floor(u + HW - 1e-6); i++)
-    for (let j = Math.floor(v - HW); j <= Math.floor(v + HW - 1e-6); j++)
-      for (let k = Math.floor(y); k <= Math.floor(y + HT - 1e-6); k++)
-        if (world.solid(world.get(p.f, i, j, k))) return true;
-  return false;
-}
+const collides = (u, v, y) => world.boxHits(p.f, u, v, y, HW, HT);
 
 // Moves along one grid axis; walking into a one-block ledge steps up onto it.
 function moveH(du, dv) {
