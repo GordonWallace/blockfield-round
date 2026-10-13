@@ -25,6 +25,14 @@ Run it with `./run.sh` and open http://localhost:8000.
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
+## Villages
+
+Villages use the **chart method** (see [docs/village-method.md](docs/village-method.md)). Each cube face is a flat
+integer grid, so a village uses its face's grid as its own flat world, and Blockfield's x/z village maths runs on it
+unchanged. A village's footprint never crosses a face edge, which rules out only 0.8% of regions. Siting uses Blockfield's
+region grid and `siteOK`. The layout is a simple flat-world placeholder: houses on a ring around a well, joined by paths.
+Press V to travel to the nearest village. The HUD shows the nearest village's distance and direction.
+
 ## Sheep
 
 The sheep are a port of Blockfield's: same model, size, speed and lure range, with flat colours. A mob is
@@ -40,7 +48,7 @@ located the same way as the player, by face, (u, v) and layer, and walks with th
 
 WASD to move, Space to jump, Ctrl to sprint. F toggles flying (Space and Shift go up and down) and G toggles
 fast flying. M opens the planet map, where you drag to turn, scroll to zoom and click to travel. T jumps to
-random land, K spawns more sheep, L holds wheat, and + / - change the view distance. Left click breaks a block and right click places planks.
+random land, V goes to the nearest village, K spawns more sheep, L holds wheat, and + / - change the view distance. Left click breaks a block and right click places planks.
 
 ## Files
 
@@ -51,8 +59,11 @@ random land, K spawns more sheep, L holds wheat, and + / - change the view dista
 | `js/terrain.js` | Continents, heights, climate and surface blocks |
 | `js/world.js` | Chunks, block access across edges, meshing and loading |
 | `js/player.js` | Movement, collision, facing and block picking |
+| `js/villages.js` | Charts, village siting, layout and stamping into chunks, nearest-village search |
 | `js/mobs.js` | Sheep: model, wandering, A* paths across face edges, following |
 | `js/main.js` | Start-up, frame loop, HUD and planet map |
 | `tools/planet-map.js` | `node tools/planet-map.js [seed] [out.png]` renders a flat world map and prints the land fraction |
 | `test/smoke.js` | Headless Playwright run: spawn, walk, cross a face edge and open the map, with screenshots |
+| `tools/village-stats.js` | `node tools/village-stats.js [seed]`: how many regions get villages and how many the edge margin excludes |
+| `test/villages.js` | Headless run: visits the nearest village and one by a cube corner, counts their blocks |
 | `test/sheep.js` | Headless run: a flock wanders, then follows the player across a face edge |

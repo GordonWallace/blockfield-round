@@ -90,5 +90,19 @@ function toGrid(d, fr) {
   return [(c * x - b * y) / det, (a * y - b * x) / det];
 }
 
-BF.planet = { toGrid, N, R, SEA, H, FACES, dir, fromDir, pos, wrap, frame };
+// Great-circle distance in blocks (at sea level) between two grid points {f, u, v}; works across faces.
+function distance(a, b) {
+  const p = dir(a.f, a.u, a.v, [0, 0, 0]), q = dir(b.f, b.u, b.v, [0, 0, 0]);
+  return Math.acos(Math.max(-1, Math.min(1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2]))) * R;
+}
+
+// Direction from a toward b as a 3D unit vector tangent to the ground at a (the start of the great circle).
+function toward(a, b) {
+  const p = dir(a.f, a.u, a.v, [0, 0, 0]), q = dir(b.f, b.u, b.v, [0, 0, 0]);
+  const k = p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  const t = [q[0] - p[0] * k, q[1] - p[1] * k, q[2] - p[2] * k], l = Math.hypot(t[0], t[1], t[2]) || 1;
+  return [t[0] / l, t[1] / l, t[2] / l];
+}
+
+BF.planet = { distance, toward, toGrid, N, R, SEA, H, FACES, dir, fromDir, pos, wrap, frame };
 })();

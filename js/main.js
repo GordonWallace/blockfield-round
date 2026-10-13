@@ -76,6 +76,17 @@ function flock(n, r) {
     if (mobs.spawnSheep(player.f, player.u + (Math.random() * 2 - 1) * r, player.v + (Math.random() * 2 - 1) * r)) made++;
 }
 
+// Travels to the nearest village (searching up to 20 km), landing a little outside it, facing its well.
+function goVillage() {
+  const near = BF.villages.near(player.f, player.u, player.v, 20000);
+  const hit = near.find((n) => n.d > 30) || near[0];
+  if (!hit) return;
+  const v = hit.v;
+  goTo(P.dir(v.f, v.x + 0.5, v.z - 45.5, [0, 0, 0]));
+  player.heading = P.toward({ f: player.f, u: player.u, v: player.v }, { f: v.f, u: v.x, v: v.z });
+  player.pitch = -0.2;
+}
+
 // ---- input ----
 addEventListener("keydown", (e) => {
   if (!started) return;
@@ -84,6 +95,7 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyG") player.fast = !player.fast;
   if (e.code === "KeyM") toggleMap();
   if (e.code === "KeyK") flock(4, 6);
+  if (e.code === "KeyV") goVillage();
   if (e.code === "KeyL") mobs.lure = !mobs.lure;
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 500; i++) { const d = [n.hash(i, 1) * 2 - 1, n.hash(i, 2) * 2 - 1, n.hash(i, 3) * 2 - 1]; if (landAt(d)) { goTo(d); break; } } }
   if (e.code === "Equal" || e.code === "NumpadAdd") setView(Math.min(24, world.viewDist + 2));
@@ -213,6 +225,16 @@ function drawOutline() {
   E.forEach((v, n) => { arr[n * 3] = c[v][0]; arr[n * 3 + 1] = c[v][1]; arr[n * 3 + 2] = c[v][2]; });
   outline.geometry.attributes.position.needsUpdate = true;
 }
+// Nearest village: distance and direction relative to where the player faces.
+function villageLine() {
+  const n = BF.villages.near(player.f, player.u, player.v, 3000)[0];
+  if (!n) return "no village within 3 km";
+  const t = P.toward({ f: player.f, u: player.u, v: player.v }, { f: n.v.f, u: n.v.x, v: n.v.z }), h = player.heading, up = player.up;
+  const c = [h[1] * t[2] - h[2] * t[1], h[2] * t[0] - h[0] * t[2], h[0] * t[1] - h[1] * t[0]];
+  const ang = Math.atan2(c[0] * up[0] + c[1] * up[1] + c[2] * up[2], h[0] * t[0] + h[1] * t[1] + h[2] * t[2]) * 180 / Math.PI;
+  const dir = Math.abs(ang) < 15 ? "ahead" : Math.abs(ang) > 165 ? "behind" : `${Math.round(Math.abs(ang))}° ${ang > 0 ? "left" : "right"}`;
+  return `${n.v.name} ${n.d < 1000 ? Math.round(n.d) + " blocks" : (n.d / 1000).toFixed(1) + " km"} ${dir}`;
+}
 function hud(st) {
   const d = P.dir(player.f, player.u, player.v, [0, 0, 0]);
   const lat = Math.asin(d[1]) * 180 / Math.PI, lon = Math.atan2(d[0], d[2]) * 180 / Math.PI;
@@ -220,7 +242,7 @@ function hud(st) {
   $("hud").textContent =
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${Math.floor(player.y)} (sea ${P.SEA})  ·  ${mode}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  travelled ${Math.round(player.travelled)} of ${4 * P.N} around\n` +
-    `${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
+    `nearest village: ${villageLine()}  ·  ${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
     `${fps} fps  ·  view ${world.viewDist} chunks  ·  ${st.meshed}/${st.wanted} chunks meshed`;
 }
 

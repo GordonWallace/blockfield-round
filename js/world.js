@@ -14,7 +14,8 @@ COL[B.GRASS] = [0x6aa84f, 0x86603e]; COL[B.SAND] = [0xdbcf9a, 0xdbcf9a];
 COL[B.WATER] = [0x2f5fc4, 0x2f5fc4]; COL[B.SNOW] = [0xf2f5f8, 0x86603e];
 COL[B.ICE] = [0xa9c8f0, 0xa9c8f0]; COL[B.GRAVEL] = [0x8a8580, 0x8a8580];
 COL[B.SANDSTONE] = [0xd2c088, 0xc9b47c]; COL[B.BEDROCK] = [0x3a3a3a, 0x3a3a3a];
-COL[B.PLANKS] = [0xb08850, 0xa07a45];
+COL[B.PLANKS] = [0xb08850, 0xa07a45]; COL[B.LOG] = [0x9a7a4a, 0x5e4426];
+COL[B.COBBLE] = [0x8c8c8c, 0x7a7a7a]; COL[B.GLASS] = [0xc8e4f0, 0xb4d8ea]; COL[B.PATH] = [0xa08a5a, 0x86603e]; COL[B.ROOF] = [0x7a4a2a, 0x6a3e22];
 const rgb = (c) => [(c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255];
 const COLF = COL.map(p => p && [rgb(p[0]), rgb(p[1])]);
 const solid = (b) => b !== B.AIR && b !== B.WATER;
@@ -43,6 +44,8 @@ function genChunk(f, cx, cz) {
     c.top[base] = s.h;
     c.tint[base] = Math.max(0, Math.min(1, (s.temp - 0.2) * 1.4)) * 0.5 + Math.max(-0.5, Math.min(0.5, s.wet));
   }
+  // structures (villages) write their blocks that fall inside this chunk
+  if (BF.villages) BF.villages.decorate(c);
   world.genCount++;
   return c;
 }

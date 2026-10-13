@@ -6,7 +6,7 @@ const BF = (window.BF = window.BF || {});
 const P = BF.planet;
 
 const B = (BF.B = { AIR: 0, STONE: 1, DIRT: 2, GRASS: 3, SAND: 4, WATER: 5, SNOW: 6, ICE: 7,
-  GRAVEL: 8, SANDSTONE: 9, BEDROCK: 10, PLANKS: 11 });
+  GRAVEL: 8, SANDSTONE: 9, BEDROCK: 10, PLANKS: 11, LOG: 12, COBBLE: 13, GLASS: 14, PATH: 15, ROOF: 16 });
 
 const LAND = 0.1;    // continent noise threshold: about a third of the surface is land
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
