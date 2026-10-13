@@ -15,6 +15,8 @@ const fs = require("fs");
   await page.click("#play");
   const settle = async (ms) => { const t = Date.now(); await page.waitForTimeout(ms); };
   await settle(8000);
+  await page.evaluate(() => { BF.player.pitch = -0.25; });
+  await settle(1500);
   const hud = () => page.$eval("#hud", (e) => e.textContent);
   console.log("spawn:\n" + await hud());
   await page.screenshot({ path: out + "/spawn.png" });
