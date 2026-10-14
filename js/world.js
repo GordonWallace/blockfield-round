@@ -291,7 +291,8 @@ function dropMesh(k) {
 // a sample lands on the unfolded neighbour; past two edges it is inside a corner's empty wedge and skipped.
 let wantKey = null, want = [];
 function wanted(f, u, v) {
-  const id = f + ":" + Math.floor(u / CS) + ":" + Math.floor(v / CS) + ":" + world.viewDist;
+  const round = world.view.k > 0;
+  const id = f + ":" + Math.floor(u / CS) + ":" + Math.floor(v / CS) + ":" + world.viewDist + ":" + round;
   if (id === wantKey) return want;
   wantKey = id;
   const seen = new Map(), V = world.viewDist, g = { f: 0, u: 0, v: 0 };
@@ -300,7 +301,8 @@ function wanted(f, u, v) {
     const d2 = dx * dx + dz * dz;
     if (d2 > V * V + V) continue;
     const su = bu + dx * CS, sv = bv + dz * CS;
-    if ((su < 0 || su >= P.N) && (sv < 0 || sv >= P.N)) continue;
+    // inside a corner's wedge: nothing to draw flat, but the round view fills it from the nearest face
+    if (!round && (su < 0 || su >= P.N) && (sv < 0 || sv >= P.N)) continue;
     P.wrap(f, su, sv, g);
     const k = key(g.f, g.u >> 4, g.v >> 4);
     if (!seen.has(k) || seen.get(k).d2 > d2) seen.set(k, { k, f: g.f, cx: g.u >> 4, cz: g.v >> 4, d2 });

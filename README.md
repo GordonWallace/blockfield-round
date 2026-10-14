@@ -24,6 +24,8 @@ Run it with `./run.sh` and open http://localhost:8000.
 - **Corners.** Only three faces meet at a cube corner (270 degrees instead of 360), so near a corner the
   flat drawing leaves a 90-degree wedge of nothing. It can only be seen within view distance of the
   corner point. Press P and pick a corner to see one; B tints each face so the three are easy to tell apart.
+  Press C to switch corners to the round view instead: within about a kilometre of a corner the true sphere
+  is drawn, so nothing is missing and the blocks show their real skew (up to 30 degrees at the point).
 - **Terrain.** Heights, coasts and climate are 3D noise sampled at each column's direction, so continents
   run seamlessly across faces. Latitude drives temperature, which gives you ice caps, snow, deserts and grass.
   The planet is about a third land.
@@ -70,7 +72,7 @@ WASD to move, Space to jump, Ctrl to sprint. F toggles flying (Space and Shift g
 fast flying (faster the higher you are). M opens the planet map, where you drag to turn, scroll to zoom and click
 to travel. P opens the teleport panel (also /): type `face 0 81920 81920 [layer]`, `35.26 45 [layer]` (latitude
 and longitude, N/S/E/W allowed), `corner 1`-`corner 8` or `up 5000`, or press a corner or height button.
-B tints each cube face. T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
+B tints each cube face and C switches corners between the gap and the round view. T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
 wheat, and + / - change the view distance. Left click breaks a block and right click places planks.
 
 ## Files

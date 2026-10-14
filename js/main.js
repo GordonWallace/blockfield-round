@@ -36,10 +36,14 @@ function setView(v) { world.viewDist = v; }
 // player's grid, then fog, sky and the camera's clip range to suit the height.
 const sky = new THREE.Color(), skyA = new THREE.Color(SKY), skyB = new THREE.Color(SPACE);
 let forceK = null;
+// Corner mode (C key): "gap" leaves the 90-degree wedge empty near a cube corner; "round" draws the true
+// round view within about a kilometre of each corner instead, so blocks there show as skewed but nothing is missing.
+let cornerRound = false, nearCorner = Infinity;
 function setupView() {
   const V = world.view, p = player, h = p.y + p.EYE - P.SEA;
   V.f = p.f; V.u = p.u; V.v = p.v; V.eyeY = p.y + p.EYE; V.eye = p.eye;
-  V.k = forceK !== null ? forceK : smooth(ALT0, ALT1, h);
+  if (cornerRound) nearCorner = nearestCorner().d;
+  V.k = forceK !== null ? forceK : Math.max(smooth(ALT0, ALT1, h), cornerRound ? smooth(1200, 500, nearCorner) : 0);
   const fr = P.frame(p.f, p.u, p.v, p.y, {}), up = fr.up, e = fr.eu, d = e[0] * up[0] + e[1] * up[1] + e[2] * up[2];
   let x = [e[0] - up[0] * d, e[1] - up[1] * d, e[2] - up[2] * d];
   const l = Math.hypot(x[0], x[1], x[2]); x = [x[0] / l, x[1] / l, x[2] / l];
@@ -135,6 +139,7 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyV") goVillage();
   if (e.code === "KeyL") mobs.lure = !mobs.lure;
   if (e.code === "KeyB") world.showFaces = !world.showFaces;
+  if (e.code === "KeyC") cornerRound = !cornerRound;
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 500; i++) { const d = [n.hash(i, 1) * 2 - 1, n.hash(i, 2) * 2 - 1, n.hash(i, 3) * 2 - 1]; if (landAt(d)) { goTo(d); break; } } }
   if (e.code === "Equal" || e.code === "NumpadAdd") setView(Math.min(24, world.viewDist + 2));
   if (e.code === "Minus" || e.code === "NumpadSubtract") setView(Math.max(4, world.viewDist - 2));
@@ -243,10 +248,14 @@ $("tpclose").addEventListener("click", closeTeleport);
 }
 
 // The nearest cube corner: number, distance in blocks, and direction relative to facing.
-function cornerLine() {
+function nearestCorner() {
   const here = { f: player.f, u: player.u, v: player.v };
   let best = null;
   CORNERS.forEach((c, i) => { const g = cornerGrid(c), d = P.distance(here, g); if (!best || d < best.d) best = { n: i + 1, d, g }; });
+  return best;
+}
+function cornerLine() {
+  const best = nearestCorner();
   return `corner ${best.n} ${best.d < 1000 ? Math.round(best.d) + " blocks" : (best.d / 1000).toFixed(1) + " km"}` + (best.d < 20000 ? " " + bearing(best.g) : "");
 }
 function bearing(g) {
@@ -344,10 +353,13 @@ function frame(now) {
   mobs.update(dt, player);
   const st = world.update();
   BF.globe.update(world.view.k);
-  const cp = Math.cos(player.pitch);
+  // facing in render space (in the round view near a corner, grid directions are skewed)
+  const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch), p = player;
+  const fh = world.dirToRender(p.f, p.u, p.v, p.y, p.heading), fu = world.dirToRender(p.f, p.u, p.v, p.y, p.up);
+  const lh = Math.hypot(...fh), lu = Math.hypot(...fu);
   camera.position.set(0, 0, 0);
-  camera.up.set(0, 1, 0);
-  camera.lookAt(player.hu * cp, Math.sin(player.pitch), -player.hv * cp);
+  camera.up.set(fu[0] / lu, fu[1] / lu, fu[2] / lu);
+  camera.lookAt(fh[0] / lh * cp + fu[0] / lu * sp, fh[1] / lh * cp + fu[1] / lu * sp, fh[2] / lh * cp + fu[2] / lu * sp);
   drawOutline();
   renderer.render(scene, camera);
   if (fpsT === 0) hud(st);
@@ -373,7 +385,7 @@ function hud(st) {
   const d = P.dir(player.f, player.u, player.v, [0, 0, 0]);
   const lat = Math.asin(d[1]) * 180 / Math.PI, lon = Math.atan2(d[0], d[2]) * 180 / Math.PI;
   const mode = player.flying ? (player.fast ? "fast fly" : "fly") : "walk", k = world.view.k;
-  const view = k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`;
+  const view = (k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`) + (cornerRound ? " (corners round)" : "");
   $("hud").textContent =
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${fmt(player.y)} (sea ${P.SEA})  ·  ${mode}  ·  view ${view}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  nearest ${cornerLine()}  ·  travelled ${fmt(player.travelled)} of ${fmt(4 * P.N)} around\n` +
@@ -388,5 +400,5 @@ resize();
 setView(8);
 requestAnimationFrame(frame);
 BF.main = { start, goTo, goGrid, goCorner, teleport, setView, map, renderer, camera, scene, CORNERS, cornerGrid, ALT0, ALT1,
-  forceBlend: (k) => { forceK = k; } };
+  forceBlend: (k) => { forceK = k; }, cornerMode: (round) => { cornerRound = round; } };
 })();
