@@ -13,6 +13,7 @@ const fs = require("fs");
   if (three) await page.route(/three\.min\.js/, (r) => r.fulfill({ body: fs.readFileSync(three), contentType: "text/javascript" }));
   await page.goto(url);
   await page.fill("#seed", process.env.SEED || "1");
+  if (process.env.CORNER_GAP) await page.evaluate(() => BF.main.cornerMode(false));
   await page.click("#play");
   const wait = (ms) => page.waitForTimeout(ms);
   const hud = () => page.$eval("#hud", (e) => e.textContent);
@@ -36,8 +37,8 @@ const fs = require("fs");
   await wait(2000);
   await shot("flat-edge");
 
-  // a cube corner from 40 blocks up, 70 blocks in from it, looking at it: flat, flat with face tints,
-  // and the same spot forced into the round view
+  // a cube corner from 40 blocks up, 70 blocks in from it, looking at it: as drawn (round near corners by
+  // default; CORNER_GAP=1 shows the empty wedge), with face tints, and forced fully round
   for (const n of (process.env.CORNERS || "1,6").split(",").map(Number)) {
     await ev((n) => { BF.main.goCorner(n, 70, 40); BF.main.setView(10); }, n);
     await wait(9000);

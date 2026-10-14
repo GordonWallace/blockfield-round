@@ -21,11 +21,12 @@ Run it with `./run.sh` and open http://localhost:8000.
   `P.UNFOLD`). Any lookup that runs off a face goes through `BF.planet.wrap`, which applies that unfold.
   The player's facing is a grid direction, and crossing an edge turns it by the same rotation, so a
   straight walk stays straight (`node tools/check-edges.js` checks all 24 edges).
-- **Corners.** Only three faces meet at a cube corner (270 degrees instead of 360), so near a corner the
-  flat drawing leaves a 90-degree wedge of nothing. It can only be seen within view distance of the
-  corner point. Press P and pick a corner to see one; B tints each face so the three are easy to tell apart.
-  Press C to switch corners to the round view instead: within about a kilometre of a corner the true sphere
-  is drawn, so nothing is missing and the blocks show their real skew (up to 30 degrees at the point).
+- **Corners.** Only three faces meet at a cube corner (270 degrees instead of 360), so flat drawing can't
+  close up there. Within about a kilometre of each of the 8 corners the view switches to the true round
+  drawing instead (blocks there are skewed by up to 30 degrees), and terrain keeps every corner open ocean
+  (land fades out between 4 and 1.5 km), so all you see is water. Press C to show the alternative, a
+  90-degree wedge left empty, visible only within view distance of the corner point. Press P and pick a
+  corner to visit one; B tints each face so the three are easy to tell apart.
 - **Terrain.** Heights, coasts and climate are 3D noise sampled at each column's direction, so continents
   run seamlessly across faces. Latitude drives temperature, which gives you ice caps, snow, deserts and grass.
   The planet is about a third land.
@@ -72,7 +73,8 @@ WASD to move, Space to jump, Ctrl to sprint. F toggles flying (Space and Shift g
 fast flying (faster the higher you are). M opens the planet map, where you drag to turn, scroll to zoom and click
 to travel. P opens the teleport panel (also /): type `face 0 81920 81920 [layer]`, `35.26 45 [layer]` (latitude
 and longitude, N/S/E/W allowed), `corner 1`-`corner 8` or `up 5000`, or press a corner or height button.
-B tints each cube face and C switches corners between the gap and the round view. T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
+B tints each cube face, C switches corners between the round view and an empty wedge, and R draws the
+true sphere everywhere, to compare (for example, rows of blocks bending where they cross a face edge). T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
 wheat, and + / - change the view distance. Left click breaks a block and right click places planks.
 
 ## Files
@@ -89,7 +91,7 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `js/mobs.js` | Sheep: model, wandering, A* paths across face edges, following |
 | `js/main.js` | Start-up, frame loop, view blend, fog and sky, HUD, teleport panel and planet map |
 | `tools/check-edges.js` | `node tools/check-edges.js`: a straight walk across each of the 24 face edges stays straight |
-| `test/flat.js` | Headless run: crosses an edge, visits two corners (flat, tinted, round), climbs to orbit, uses the teleport panel. `SEED=19 CORNERS=8,1` shows a corner on land |
+| `test/flat.js` | Headless run: crosses an edge, visits two corners (as drawn, tinted, forced round), climbs to orbit, uses the teleport panel |
 | `tools/planet-map.js` | `node tools/planet-map.js [seed] [out.png]` renders a flat world map and prints the land fraction |
 | `test/smoke.js` | Headless Playwright run: spawn, walk, cross a face edge and open the map, with screenshots |
 | `tools/village-stats.js` | `node tools/village-stats.js [seed]`: how many regions get villages and how many the edge margin excludes |

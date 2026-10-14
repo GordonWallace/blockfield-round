@@ -25,7 +25,10 @@ BF.makeTerrain = function (seed) {
     const wy = nB.fbm3(X / WP + 31.7, Y / WP, Z / WP, 3) * WA;
     const wz = nB.fbm3(X / WP + 57.3, Y / WP, Z / WP, 3) * WA;
     const c = nA.fbm3((X + wx) / C, (Y + wy) / C, (Z + wz) / C, detail ? 9 : 5);
-    const land = c - LAND;
+    // The 8 cube corners are always open ocean (land fades out from 4 km to 1.5 km), so the round view
+    // drawn there (see main.js, corner mode) is only ever water.
+    const corner = Math.acos(Math.min(1, (Math.abs(x) + Math.abs(y) + Math.abs(z)) / Math.sqrt(3))) * R;
+    const land = c - LAND - 1.2 * smooth(4000, 1500, corner);
     let h;
     if (land < 0) {
       h = SEA - 3 - 55 * smooth(0, 0.12, -land) + (detail ? nC.n3(X / 60, Y / 60, Z / 60) * 3 : 0);

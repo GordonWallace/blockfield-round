@@ -36,9 +36,9 @@ function setView(v) { world.viewDist = v; }
 // player's grid, then fog, sky and the camera's clip range to suit the height.
 const sky = new THREE.Color(), skyA = new THREE.Color(SKY), skyB = new THREE.Color(SPACE);
 let forceK = null;
-// Corner mode (C key): "gap" leaves the 90-degree wedge empty near a cube corner; "round" draws the true
-// round view within about a kilometre of each corner instead, so blocks there show as skewed but nothing is missing.
-let cornerRound = false, nearCorner = Infinity;
+// Corner mode (C key): "round" (the default) draws the true round view within about a kilometre of each
+// cube corner, so nothing is missing there (the corners are always ocean); "gap" leaves the 90-degree wedge empty.
+let cornerRound = true, nearCorner = Infinity;
 function setupView() {
   const V = world.view, p = player, h = p.y + p.EYE - P.SEA;
   V.f = p.f; V.u = p.u; V.v = p.v; V.eyeY = p.y + p.EYE; V.eye = p.eye;
@@ -57,7 +57,7 @@ function setupView() {
   const above = Math.max(0, p.altitude()), horizon = Math.sqrt(Math.max(0, h) * (2 * P.R + Math.max(0, h)));
   const kf = smooth(ALT0, ALT0 + 500, h), lerpLog = (a, b, t) => Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * t);
   const far = lerpLog(r * 0.95 + above, horizon * 1.25, kf) * (1 + 1e4 * smooth(ALT1, 4 * ALT1, h));
-  sh.fogFar.value = forceK === 1 ? 1e9 : far;
+  sh.fogFar.value = far;
   sh.fogNear.value = sh.fogFar.value * (0.58 - 0.18 * kf);
   sky.copy(skyA).lerp(skyB, smooth(3000, 60000, h));
   scene.background = sky; sh.fogColor.value.copy(sky);
@@ -140,6 +140,7 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyL") mobs.lure = !mobs.lure;
   if (e.code === "KeyB") world.showFaces = !world.showFaces;
   if (e.code === "KeyC") cornerRound = !cornerRound;
+  if (e.code === "KeyR") forceK = forceK === 1 ? null : 1;   // true sphere everywhere, for comparison
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 500; i++) { const d = [n.hash(i, 1) * 2 - 1, n.hash(i, 2) * 2 - 1, n.hash(i, 3) * 2 - 1]; if (landAt(d)) { goTo(d); break; } } }
   if (e.code === "Equal" || e.code === "NumpadAdd") setView(Math.min(24, world.viewDist + 2));
   if (e.code === "Minus" || e.code === "NumpadSubtract") setView(Math.max(4, world.viewDist - 2));
@@ -385,7 +386,7 @@ function hud(st) {
   const d = P.dir(player.f, player.u, player.v, [0, 0, 0]);
   const lat = Math.asin(d[1]) * 180 / Math.PI, lon = Math.atan2(d[0], d[2]) * 180 / Math.PI;
   const mode = player.flying ? (player.fast ? "fast fly" : "fly") : "walk", k = world.view.k;
-  const view = (k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`) + (cornerRound ? " (corners round)" : "");
+  const view = (k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`) + (cornerRound ? "" : " (corner gaps)") + (forceK === 1 ? " (R: true sphere)" : "");
   $("hud").textContent =
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${fmt(player.y)} (sea ${P.SEA})  ·  ${mode}  ·  view ${view}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  nearest ${cornerLine()}  ·  travelled ${fmt(player.travelled)} of ${fmt(4 * P.N)} around\n` +
