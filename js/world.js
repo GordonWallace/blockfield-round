@@ -21,14 +21,20 @@ const P = BF.planet, B = BF.B, CS = 16, H = P.H, NC = P.N / CS;
 const COL = [];
 COL[B.STONE] = [0x7d7d7d, 0x7d7d7d]; COL[B.DIRT] = [0x86603e, 0x86603e];
 COL[B.GRASS] = [0x6aa84f, 0x86603e]; COL[B.SAND] = [0xdbcf9a, 0xdbcf9a];
-COL[B.WATER] = [0x2f5fc4, 0x2f5fc4]; COL[B.SNOW] = [0xf2f5f8, 0x86603e];
+COL[B.WATER] = [0x2f5fc4, 0x2f5fc4]; COL[B.SNOW] = [0xf2f5f8, 0xdfe5ea];
 COL[B.ICE] = [0xa9c8f0, 0xa9c8f0]; COL[B.GRAVEL] = [0x8a8580, 0x8a8580];
 COL[B.SANDSTONE] = [0xd2c088, 0xc9b47c]; COL[B.BEDROCK] = [0x3a3a3a, 0x3a3a3a];
 COL[B.PLANKS] = [0xb08850, 0xa07a45]; COL[B.LOG] = [0x9a7a4a, 0x5e4426];
+COL[B.LEAVES] = [0x4a8a2a, 0x4a8a2a]; COL[B.BIRCH_LOG] = [0xc8b07a, 0xd9d6cc]; COL[B.SPRUCE_LOG] = [0x6e5434, 0x3e2c1a];
+COL[B.SPRUCE_LEAVES] = [0x3a5e3a, 0x3a5e3a]; COL[B.JUNGLE_LOG] = [0x9a7a40, 0x5a4a22]; COL[B.JUNGLE_LEAVES] = [0x3a9a24, 0x3a9a24];
+COL[B.ACACIA_LOG] = [0xb0603a, 0x6a6460]; COL[B.ACACIA_LEAVES] = [0x7a8a2a, 0x7a8a2a]; COL[B.BIRCH_LEAVES] = [0x6a9a4a, 0x6a9a4a];
+COL[B.DARK_LEAVES] = [0x2f5a1c, 0x2f5a1c]; COL[B.CHERRY_LEAVES] = [0xf0b8d0, 0xf0b8d0]; COL[B.MANGROVE_LEAVES] = [0x4a7a2a, 0x4a7a2a];
+COL[B.CACTUS] = [0x5a8a3a, 0x4a7a2e]; COL[B.RED_SAND] = [0xbe6a32, 0xbe6a32]; COL[B.TERRACOTTA] = [0x9a5a3e, 0x9a5a3e];
 COL[B.COBBLE] = [0x8c8c8c, 0x7a7a7a]; COL[B.GLASS] = [0xc8e4f0, 0xb4d8ea]; COL[B.PATH] = [0xa08a5a, 0x86603e]; COL[B.ROOF] = [0x7a4a2a, 0x6a3e22];
 const rgb = (c) => [(c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255];
 const COLF = COL.map(p => p && [rgb(p[0]), rgb(p[1])]);
 const solid = (b) => b !== B.AIR && b !== B.WATER;
+const GRASS = BF.climate.GRASS;
 const opaque = (b) => solid(b) && b !== B.ICE;
 
 const world = (BF.world = {
@@ -130,16 +136,17 @@ world.dirToRender = function (g, u, v, y, d) {
 };
 
 function genChunk(f, cx, cz) {
-  const c = { f, cx, cz, blocks: new Uint8Array(CS * CS * H), top: new Int16Array(CS * CS), tint: new Float32Array(CS * CS), dirty: true, edited: false };
+  const c = { f, cx, cz, blocks: new Uint8Array(CS * CS * H), top: new Int16Array(CS * CS), biome: new Uint8Array(CS * CS), dirty: true, edited: false };
   const d = [0, 0, 0];
   for (let z = 0; z < CS; z++) for (let x = 0; x < CS; x++) {
     P.dir(f, cx * CS + x + 0.5, cz * CS + z + 0.5, d);
     const base = z * CS + x;
-    const s = world.terrain.column(d[0], d[1], d[2], (y, b) => { c.blocks[y * CS * CS + base] = b; });
+    const s = world.terrain.column(f, cx * CS + x, cz * CS + z, d, (y, b) => { c.blocks[y * CS * CS + base] = b; });
     c.top[base] = s.h;
-    c.tint[base] = Math.max(0, Math.min(1, (s.temp - 0.2) * 1.4)) * 0.5 + Math.max(-0.5, Math.min(0.5, s.wet));
+    c.biome[base] = s.biome;
   }
-  // structures (villages) write their blocks that fall inside this chunk
+  // trees, then structures (villages), write their blocks that fall inside this chunk
+  if (BF.flora) BF.flora.decorate(c);
   if (BF.villages) BF.villages.decorate(c);
   world.genCount++;
   return c;
@@ -253,10 +260,7 @@ function buildMesh(c) {
         continue;
       }
       let topCol = COLF[b][0];
-      if (b === B.GRASS) {
-        const t = c.tint[z * CS + x];  // dry yellow-green to lush green
-        topCol = [0.42 + 0.25 * (0.5 - t) * 0.6, 0.66 - 0.1 * Math.abs(t), 0.31 - 0.1 * t];
-      }
+      if (b === B.GRASS) topCol = GRASS[c.biome[z * CS + x]];
       const sideCol = COLF[b][1];
       const show = (n) => !opaque(n) && n !== b;
       if (show(at(x, y + 1, z))) quad(S, [[x, y + 1, z], [x + 1, y + 1, z], [x + 1, y + 1, z + 1], [x, y + 1, z + 1]], shade(topCol, SHADE.top, x, y, z), dv(x, z));

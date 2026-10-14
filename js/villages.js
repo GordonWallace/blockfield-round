@@ -11,14 +11,15 @@ const BF = (window.BF = window.BF || {});
 const P = BF.planet, B = BF.B, world = BF.world;
 
 // ---------- charts: Blockfield's world API on one face ----------
-// getBlock / setBlock take Blockfield's (x, y, z) order; surface is the terrain height before any structure.
+// getBlock / setBlock take Blockfield's (x, y, z) order; surface is the terrain height (rivers carved in)
+// before any structure.
 BF.chart = function (f) {
   const d = [0, 0, 0];
   return {
     f,
     getBlock: (x, y, z) => world.get(f, x, z, y),
     setBlock: (x, y, z, b) => world.set(f, x, z, y, b),
-    sample: (x, z) => { P.dir(f, x + 0.5, z + 0.5, d); return world.terrain.sample(d[0], d[1], d[2]); },
+    sample: (x, z) => { P.dir(f, x + 0.5, z + 0.5, d); return world.terrain.surface(f, x, z, d); },
     surface(x, z) { return this.sample(x, z).h; },
   };
 };
@@ -28,14 +29,15 @@ const REGION = 384, RHALF = 192, VLIM = 70;   // as Blockfield: one candidate pe
 const MARGIN = RHALF + VLIM;                  // new: no region within this distance of a face edge, so footprints stay on one face
 const regionOf = (v) => Math.floor((v + RHALF) / REGION);
 
-// Blockfield's siteOK, strict level: dry, flat ground. Unchanged apart from reading terrain through the chart.
+// Blockfield's siteOK, strict level: dry, flat ground. Unchanged apart from reading terrain through the chart
+// (river water counts as wet, as Blockfield's river test does).
 function siteOK(ch, x, z) {
   const SEA = P.SEA, s0 = ch.sample(x, z), h0 = s0.h;
-  if (h0 <= SEA + 1 || (s0.top !== B.GRASS && s0.top !== B.SAND)) return false;
+  if (h0 <= SEA + 1 || s0.river || (s0.top !== B.GRASS && s0.top !== B.SAND && s0.top !== B.SNOW)) return false;
   let lo = h0, hi = h0, wet = 0;
   for (let dz = -28; dz <= 28; dz += 7) for (let dx = -28; dx <= 28; dx += 7) {
-    const h = ch.surface(x + dx, z + dz);
-    if (h <= SEA) wet++;
+    const s = ch.sample(x + dx, z + dz), h = s.h;
+    if (h <= SEA || s.wl > h) wet++;
     if (h < lo) lo = h; if (h > hi) hi = h;
   }
   return wet <= 4 && hi - lo <= 9;
@@ -174,6 +176,12 @@ villages.decorate = function (c) {
         else if (b === B.AIR && y === c.top[i]) { let t = y; while (t > 0 && (c.blocks[t * CS * CS + i] === B.AIR || c.blocks[t * CS * CS + i] === B.WATER)) t--; c.top[i] = t; }
       }
     }
+};
+
+// True if column (f, u, v) is inside some village's footprint (trees keep out).
+villages.inVillage = function (f, u, v) {
+  const s = site(f, regionOf(u), regionOf(v));
+  return !!s && Math.abs(u - s.x) <= VLIM + 10 && Math.abs(v - s.z) <= VLIM + 10;
 };
 
 // Villages within r blocks of grid point (f, u, v), nearest first. Samples region centres around the point

@@ -2,7 +2,7 @@
 // Usage: node tools/village-stats.js [seed] [samples]
 const path = require("path");
 global.window = global;
-for (const f of ["noise", "planet", "terrain"]) require(path.join(__dirname, "..", "js", f + ".js"));
+for (const f of ["noise", "planet", "climate", "rivers", "terrain"]) require(path.join(__dirname, "..", "js", f + ".js"));
 BF.world = { terrain: BF.makeTerrain(+(process.argv[2] || 1)), get() { return 0; }, set() {} };
 require(path.join(__dirname, "..", "js", "villages.js"));
 const P = BF.planet, V = BF.villages, n = +(process.argv[3] || 4000), R = V.REGION, RN = Math.floor(P.N / R);

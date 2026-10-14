@@ -2,7 +2,7 @@
 
 A prototype of [Blockfield](https://github.com/GordonWallace/blockfield) on a round planet. The question it
 answers is whether a voxel world can be wrapped onto a sphere and still be coherent and cheap to run.
-It has one mob, Blockfield's sheep. There are no rivers, textures, saving or inventory yet.
+It has one mob, Blockfield's sheep. There are no textures, saving or inventory yet.
 
 Run it with `./run.sh` and open http://localhost:8000.
 
@@ -27,9 +27,26 @@ Run it with `./run.sh` and open http://localhost:8000.
   (land fades out between 4 and 1.5 km), so all you see is water. Press C to show the alternative, a
   90-degree wedge left empty, visible only within view distance of the corner point. Press P and pick a
   corner to visit one; B tints each face so the three are easy to tell apart.
-- **Terrain.** Heights, coasts and climate are 3D noise sampled at each column's direction, so continents
-  run seamlessly across faces. Latitude drives temperature, which gives you ice caps, snow, deserts and grass.
-  The planet is about a third land.
+- **Terrain.** Heights and coasts are 3D noise sampled at each column's direction, so continents run
+  seamlessly across faces. The planet is about a third land.
+- **Climate bands** (`js/climate.js`). Five bands run from the equator to the poles, as on Earth: tropical,
+  subtropical, temperate, subarctic and arctic. A column's band comes from its climate latitude: its real
+  latitude, wandered by slow noise (edges are ragged and reach up to about 10 degrees past their average) and
+  raised by altitude (about 20 degrees colder on high ground, so mountains carry snow and taiga further toward
+  the equator). Within a band, rainfall picks the biome. Rainfall also follows latitude like Earth's: a wet
+  equator, a dry belt around 22 degrees where the deserts and badlands sit, wet mid-latitudes and dry poles,
+  plus noise and drier continental interiors. Each band has several biomes: jungle, sparse jungle, mangrove,
+  savanna and desert in the tropics; desert, badlands, savanna, plains, forest, cherry grove and swamp in the
+  subtropics; plains, meadow, forest, flower forest, birch and dark forest in the temperate band; taiga, old
+  taiga, snowy taiga and snowy plains in the subarctic; and snowy plains, snowy taiga and ice sheet in the
+  arctic. Biome ids and names are Blockfield's. Trees (`js/flora.js`) follow the biome.
+- **Rivers** (`js/rivers.js`). The whole planet's drainage is solved when a world starts (under a second):
+  a node about every kilometre, a priority flood from the sea so every node has a way down, steepest descent
+  so water gathers into trunk rivers, flow summed from the sources so tributaries join into wider rivers,
+  and a water surface set from the sea upward so it never rises downstream. The blocks are carved from
+  that: channel, banks one block above the water, valley sides cut back where hills stand in the way, and a
+  levee where a river crosses low ground. Rivers freeze over in the arctic band. `node tools/river-check.js`
+  proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
@@ -83,7 +100,10 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 |---|---|
 | `js/noise.js` | Seeded simplex noise, copied unchanged from Blockfield |
 | `js/planet.js` | Cube-sphere maths: grid to direction, direction to grid, edge unfolds, wrapping and local frames |
-| `js/terrain.js` | Continents, heights, climate and surface blocks |
+| `js/climate.js` | Climate bands, rainfall, biome choice, grass colours, tree table, map colours |
+| `js/rivers.js` | The planet-wide river network and the nearest-river lookup used for carving |
+| `js/terrain.js` | Continents, heights, surface blocks, and river carving (`surface`, `column`) |
+| `js/flora.js` | Trees by biome, whole across face edges |
 | `js/world.js` | Chunks, block access across edges, meshing and loading, flat and round placement and the blend shader |
 | `js/globe.js` | The coarse whole-planet mesh shown in the round view |
 | `js/player.js` | Movement, collision, facing and block picking |
@@ -92,7 +112,8 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `js/main.js` | Start-up, frame loop, view blend, fog and sky, HUD, teleport panel and planet map |
 | `tools/check-edges.js` | `node tools/check-edges.js`: a straight walk across each of the 24 face edges stays straight |
 | `test/flat.js` | Headless run: crosses an edge, visits two corners (as drawn, tinted, forced round), climbs to orbit, uses the teleport panel |
-| `tools/planet-map.js` | `node tools/planet-map.js [seed] [out.png]` renders a flat world map and prints the land fraction |
+| `tools/planet-map.js` | `node tools/planet-map.js [seed] [out.png] [width] [lat lon span]` renders a world map (biomes, band edges, rivers) and prints land, band, biome and river figures |
+| `tools/river-check.js` | `node tools/river-check.js [seed] [rivers]`: no loops, no uphill steps, no crossings, and on the blocks no rises, dry stretches or spills |
 | `test/smoke.js` | Headless Playwright run: spawn, walk, cross a face edge and open the map, with screenshots |
 | `tools/village-stats.js` | `node tools/village-stats.js [seed]`: how many regions get villages and how many the edge margin excludes |
 | `test/villages.js` | Headless run: visits the nearest village and one by a cube corner, counts their blocks |

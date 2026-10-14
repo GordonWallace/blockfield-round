@@ -10,11 +10,8 @@ const globe = (BF.globe = { group: null, faces: [], next: 0, done: false });
 
 function colour(s) {
   if (s.h < P.SEA) return s.ice ? [0.86, 0.92, 0.96] : [0.18 + (s.h - 40) / 900, 0.3 + (s.h - 40) / 400, 0.72];
-  if (s.top === B.SNOW) return [0.94, 0.94, 0.96];
-  if (s.top === B.SAND) return [0.82, 0.76, 0.55];
-  if (s.top === B.STONE) return [0.5, 0.5, 0.5];
-  const e = (s.h - P.SEA) / 200;
-  return [0.36 + e * 0.35, 0.6 - e * 0.1, 0.28 + e * 0.2];
+  const c = BF.climate.mapColour(s), e = 0.9 + 0.25 * Math.min(1, (s.h - P.SEA) / 250);
+  return [c[0] * e, c[1] * e, c[2] * e];
 }
 
 // One face, built row by row: { anchor, rows, pos, col }.

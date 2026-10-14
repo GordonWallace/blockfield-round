@@ -283,12 +283,8 @@ function buildMap() {
       const s = T.sample(d[0], d[1], d[2], false);
       const r = 1 + Math.max(0, s.h - P.SEA) / P.R * 3;
       pos.push(d[0] * r, d[1] * r, d[2] * r);
-      let c;
-      if (s.h < P.SEA) c = s.ice ? [0.86, 0.92, 0.96] : [0.12, 0.24 + (s.h - 40) / 250, 0.55 + (s.h - 40) / 200];
-      else if (s.top === B.SNOW) c = [0.94, 0.94, 0.96];
-      else if (s.top === B.SAND) c = [0.82, 0.76, 0.55];
-      else if (s.top === B.STONE) c = [0.5, 0.5, 0.5];
-      else { const e = (s.h - P.SEA) / 200; c = [0.27 + e * 0.45, 0.55 - e * 0.08, 0.24 + e * 0.25]; }
+      let c = BF.climate.mapColour(s);
+      if (s.h >= P.SEA) { const e = 0.85 + 0.3 * Math.min(1, (s.h - P.SEA) / 250); c = c.map((x) => x * e); }
       col.push(c[0], c[1], c[2]);
     }
     for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
@@ -301,6 +297,22 @@ function buildMap() {
   g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   g.setIndex(idx);
   map.globe = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  // rivers: every link's meandering centre line, a little above the ground
+  const RV = T.rivers(), rp = [], rc = [], q = [0, 0, 0];
+  for (let li = 0; li < RV.link.length; li++) {
+    const cv = RV.curve(li), big = Math.min(1, cv.w / BF.rivers.WCAP);
+    for (let k = 0; k < cv.xs.length - 1; k += 4) {
+      for (const j of [k, Math.min(cv.xs.length - 1, k + 4)]) {
+        P.dir(cv.F, cv.xs[j], cv.ys[j], q);
+        const r = 1 + Math.max(0, cv.r[j] - P.SEA) / P.R * 3 + 0.0012;
+        rp.push(q[0] * r, q[1] * r, q[2] * r); rc.push(0.25 - 0.15 * big, 0.5 - 0.15 * big, 1);
+      }
+    }
+  }
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute("position", new THREE.Float32BufferAttribute(rp, 3));
+  lg.setAttribute("color", new THREE.Float32BufferAttribute(rc, 3));
+  map.globe.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true })));
   map.scene.add(map.globe);
   if (!map.marker) {
     map.marker = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff2020 }));
@@ -387,10 +399,13 @@ function hud(st) {
   const lat = Math.asin(d[1]) * 180 / Math.PI, lon = Math.atan2(d[0], d[2]) * 180 / Math.PI;
   const mode = player.flying ? (player.fast ? "fast fly" : "fly") : "walk", k = world.view.k;
   const view = (k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`) + (cornerRound ? "" : " (corner gaps)") + (forceK === 1 ? " (R: true sphere)" : "");
+  const cs = world.terrain.surface(player.f, Math.floor(player.u), Math.floor(player.v), d);
+  const climate = `${BF.climate.NAMES[cs.biome]}, ${BF.climate.BANDS[cs.band]} band (climate latitude ${Math.round(cs.elat)}°)` +
+    (cs.river ? " · river" : "");
   $("hud").textContent =
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${fmt(player.y)} (sea ${P.SEA})  ·  ${mode}  ·  view ${view}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  nearest ${cornerLine()}  ·  travelled ${fmt(player.travelled)} of ${fmt(4 * P.N)} around\n` +
-    `nearest village: ${villageLine()}  ·  ${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
+    `${climate}  ·  nearest village: ${villageLine()}  ·  ${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
     `${fps} fps  ·  view ${world.viewDist} chunks  ·  ${st.meshed}/${st.wanted} chunks meshed`;
 }
 
