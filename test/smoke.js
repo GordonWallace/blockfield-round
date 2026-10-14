@@ -28,10 +28,9 @@ const fs = require("fs");
   // put the player near a face edge and fly across it
   const before = await page.evaluate(() => {
     const p = BF.player, N = BF.planet.N;
-    BF.main.goTo(BF.planet.dir(p.f, N - 30, p.v, [0, 0, 0]));
+    BF.main.goTo(BF.planet.dir(p.f, N - 15, p.v, [0, 0, 0]));
     p.flying = true; p.y += 30; p.pitch = -0.4;
-    const fr = BF.planet.frame(p.f, p.u, p.v, p.y, {});
-    const l = Math.hypot(...fr.eu); p.heading = fr.eu.map((x) => x / l);
+    p.hu = 1; p.hv = 0;
     return { f: p.f, u: p.u };
   });
   await settle(3000);

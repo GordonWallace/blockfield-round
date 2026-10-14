@@ -19,19 +19,38 @@
   #title input { font: inherit; padding: 6px 8px; width: 120px; }
   #title button { font: inherit; padding: 6px 18px; margin-left: 8px; cursor: pointer; }
   #title kbd { background: #26364d; border-radius: 3px; padding: 0 4px; }
+  #tp { display: none; position: fixed; left: 50%; top: 18%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); box-sizing: border-box;
+        background: rgba(10, 16, 28, 0.92); border: 1px solid #3a4c68; border-radius: 8px; padding: 16px 18px; }
+  #tp h2 { margin: 0 0 8px; font-size: 18px; }
+  #tp input { font: 15px ui-monospace, monospace; padding: 6px 8px; width: calc(100% - 70px); box-sizing: border-box; }
+  #tp button { font: inherit; padding: 4px 12px; margin: 4px 6px 0 0; cursor: pointer; }
+  #tp .row { margin-top: 10px; color: #c8d3e0; }
+  #tp .hint { color: #8fa3bd; font-size: 13px; margin-top: 8px; }
+  #tpmsg { color: #ffd27a; min-height: 1.4em; margin-top: 6px; font-size: 13px; }
   #maphelp { display: none; position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #c8d3e0; pointer-events: none; }
 </style>
 </head>
 <body>
 <div id="hud"></div>
 <div id="cross"></div>
+<div id="tp">
+  <h2>Teleport</h2>
+  <input id="tpin" placeholder="face 0 81920 81920   or   35.26 45   or   corner 3" autocomplete="off"><button id="tpgo">Go</button>
+  <div id="tpmsg"></div>
+  <div class="row">Cube corners (where three faces meet): <span id="tpcorners"></span></div>
+  <div class="row">Height here: <span id="tpheights"></span></div>
+  <div class="hint">Coordinates: <b>face f u v [layer]</b> (u and v from 0 to 163,839), or <b>lat lon [layer]</b> (N/S/E/W allowed),
+    or <b>corner 1-8</b>, or <b>up 5000</b> for a height above sea level. Below 250 blocks above the sea the world is drawn flat;
+    from there it blends into the true round planet, fully round by 2,500.</div>
+  <div class="row"><button id="tpclose">Close (Esc)</button></div>
+</div>
 <div id="maphelp">Drag to turn the planet, scroll to zoom, click a spot to travel there. M returns.</div>
 <div id="title"><div class="box">
   <h1>Blockfield Round</h1>
-  <p>Prototype: a cube-sphere planet 655,360 blocks around (about 127 game days of walking), with continents, oceans, climate, villages and sheep. No rivers or textures yet.</p>
+  <p>Prototype: a cube-sphere planet 655,360 blocks around (about 127 game days of walking), with continents, oceans, climate, villages and sheep. No rivers or textures yet. Near the ground each face is drawn flat, so blocks are always square; climb above 250 blocks over the sea and the view blends into the true round planet.</p>
   <p><label>Seed <input id="seed" value="1"></label><button id="play">Play</button></p>
   <p><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Ctrl</kbd> sprint · <kbd>F</kbd> fly (<kbd>Space</kbd>/<kbd>Shift</kbd> up/down) · <kbd>G</kbd> fast fly ·
-     <kbd>M</kbd> planet map · <kbd>T</kbd> random land · <kbd>V</kbd> nearest village · <kbd>K</kbd> more sheep · <kbd>L</kbd> hold wheat (sheep follow) · <kbd>+</kbd>/<kbd>-</kbd> view distance · left click break · right click place</p>
+     <kbd>M</kbd> planet map · <kbd>P</kbd> teleport (coordinates, cube corners, heights) · <kbd>B</kbd> tint each cube face · <kbd>T</kbd> random land · <kbd>V</kbd> nearest village · <kbd>K</kbd> more sheep · <kbd>L</kbd> hold wheat (sheep follow) · <kbd>+</kbd>/<kbd>-</kbd> view distance · left click break · right click place</p>
 </div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/noise.js"></script>
@@ -39,6 +58,7 @@
 <script src="js/terrain.js"></script>
 <script src="js/world.js"></script>
 <script src="js/villages.js"></script>
+<script src="js/globe.js"></script>
 <script src="js/player.js"></script>
 <script src="js/mobs.js"></script>
 <script src="js/main.js"></script>

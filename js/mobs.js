@@ -207,11 +207,13 @@ function move(m, dt, vel, fr) {
   m.moving = vel ? Math.min(1, m.moving + dt * 6) : Math.max(0, m.moving - dt * 6);
 }
 
-function draw(m, eye, up) {
-  const p = P.pos(m.f, m.u, m.v, m.y, [0, 0, 0]);
-  const r = m.model.root, h = norm(flat(m.heading, up)), x = cross(up, h);
-  r.position.set(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
-  r.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...x), new THREE.Vector3(...up), new THREE.Vector3(...h)));
+// Places the model in render space (flat or round, as the world is drawn; see world.toRender).
+function draw(m, up) {
+  const r = m.model.root, p = world.toRender(m.f, m.u, m.v, m.y, [0, 0, 0]);
+  const ru = norm(world.dirToRender(m.f, m.u, m.v, m.y, up));
+  const x = norm(cross(ru, world.dirToRender(m.f, m.u, m.v, m.y, flat(m.heading, up)))), h = cross(x, ru);
+  r.position.set(p[0], p[1], p[2]);
+  r.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...x), new THREE.Vector3(...ru), new THREE.Vector3(...h)));
   m.phase += m.moving * 0.25;
   for (const l of m.model.legs) l.rotation.x = Math.sin(m.phase) * 0.6 * m.moving * l.userData.swing;
 }
@@ -228,7 +230,7 @@ mobs.update = function (dt, player) {
     const fr = P.frame(m.f, m.u, m.v, m.y, {});
     think(m, dt, player);
     move(m, dt, steer(m, fr, pos3, dt), fr);
-    draw(m, player.eye, fr.up);
+    draw(m, fr.up);
   }
 };
 

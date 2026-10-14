@@ -40,7 +40,7 @@ const fs = require("fs");
         const cos = (eu[0] * ev[0] + eu[1] * ev[1] + eu[2] * ev[2]) / Math.hypot(...eu) / Math.hypot(...ev);
         BF.main.goTo(BF.planet.dir(f, s.x + 0.5, s.z - 45.5, [0, 0, 0]));
         const p = BF.player;
-        p.heading = BF.planet.toward({ f: p.f, u: p.u, v: p.v }, { f, u: s.x, v: s.z });
+        p.setHeading(BF.planet.toward({ f: p.f, u: p.u, v: p.v }, { f, u: s.x, v: s.z }));
         p.flying = true; p.y += 25; p.pitch = -0.45;
         return { face: f, x: s.x, z: s.z, skew_deg: +(Math.asin(Math.abs(cos)) * 180 / Math.PI).toFixed(1), aspect: +(Math.hypot(...eu) / Math.hypot(...ev)).toFixed(2) };
       }

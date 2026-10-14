@@ -1,7 +1,17 @@
 // Chunks (16 x 16 columns on one face, full height), block access across face edges, and meshing.
-// Meshes are built in face grid coordinates and each vertex is bent onto the sphere. Every mesh is
-// stored relative to its own anchor point and placed relative to the camera each frame (floating
-// origin), so float32 precision holds anywhere on the planet.
+//
+// Drawing has two views, blended by world.view.k:
+//  - Flat (k = 0, near the ground): the player's face grid is drawn flat, exactly like a flat world,
+//    so every block is square. Chunks on a neighbouring face are unfolded rigidly across the shared
+//    edge (a 90-degree rotation plus an offset). Around a cube corner only three faces meet, so a
+//    90-degree wedge is left empty there.
+//  - Round (k = 1, high up): every vertex sits at its true place on the sphere.
+// Each mesh carries both positions (flat ones chunk-local, round ones relative to the chunk's anchor)
+// and a small shader mixes them. Both are placed relative to the eye each frame (floating origin), so
+// float32 precision holds anywhere on the planet.
+//
+// Render space: x = grid u, y = layer (up), z = -grid v, with the eye at the origin. In the round view
+// the sphere is turned so the player's local up, u and v directions line up with those axes.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
@@ -27,11 +37,90 @@ const world = (BF.world = {
 });
 const key = (f, cx, cz) => f * NC * NC + cx * NC + cz;
 
+// Shared by every chunk material, so one write per frame updates them all.
+const shared = {
+  k: { value: 0 }, fogColor: { value: new THREE.Color(0x8fbde8) }, fogNear: { value: 80 }, fogFar: { value: 120 },
+};
+const VERT = `
+attribute vec3 sphere;
+attribute vec3 color;
+uniform mat4 flatM;
+uniform mat4 sphM;
+uniform float k;
+varying vec3 vColor;
+varying float vDist;
+void main() {
+  vec3 a = (flatM * vec4(position, 1.0)).xyz;
+  vec3 b = (sphM * vec4(sphere, 1.0)).xyz;
+  vec4 mv = viewMatrix * vec4(mix(a, b, k), 1.0);
+  vColor = color;
+  vDist = length(mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}`;
+const FRAG = `
+uniform vec3 fogColor;
+uniform float fogNear;
+uniform float fogFar;
+uniform float opacity;
+uniform vec3 tint;
+varying vec3 vColor;
+varying float vDist;
+void main() {
+  gl_FragColor = vec4(mix(vColor * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
+}`;
+function material(water) {
+  const m = new THREE.ShaderMaterial({
+    vertexShader: VERT, fragmentShader: FRAG,
+    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) } },
+    transparent: water, depthWrite: !water,
+  });
+  return m;
+}
+world.material = material;
+world.shared = shared;
+
 world.init = function (scene, seed) {
   world.scene = scene;
   world.terrain = BF.makeTerrain(seed);
-  world.matSolid = new THREE.MeshBasicMaterial({ vertexColors: true });
-  world.matWater = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false });
+};
+
+// What the camera sees from: the player's face and grid position, eye layer, eye position on the sphere,
+// the rotation M (rows: render x, y, z axes in planet space) and the blend k. main.js fills it each frame.
+world.view = { f: 0, u: 0, v: 0, eyeY: 0, eye: [0, 0, 0], M: [1, 0, 0, 0, 1, 0, 0, 0, 1], k: 0 };
+
+// The rigid map { A, t } from face g's grid into the view face f's flat grid (see P.EDGE), or null
+// when g is the opposite face (never drawn flat).
+const IDENT = { A: [1, 0, 0, 1], t: [0, 0] };
+function unfold(f, g) { return f === g ? IDENT : P.UNFOLD[f][g] || null; }
+world.unfold = unfold;
+
+// Render-space position of grid point (g, u, v) at layer y, in the current blend.
+world.toRender = function (g, u, v, y, out) {
+  const V = world.view, k = V.k, e = unfold(V.f, g);
+  let fx = 0, fy = y - V.eyeY, fz = 0;
+  if (e) {
+    const U = e.A[0] * u + e.A[1] * v + e.t[0], W = e.A[2] * u + e.A[3] * v + e.t[1];
+    fx = U - V.u; fz = -(W - V.v);
+  }
+  if (k <= 0 && e) { out[0] = fx; out[1] = fy; out[2] = fz; return out; }
+  const p = P.pos(g, u, v, y, [0, 0, 0]), M = V.M;
+  const dx = p[0] - V.eye[0], dy = p[1] - V.eye[1], dz = p[2] - V.eye[2];
+  const sx = M[0] * dx + M[1] * dy + M[2] * dz, sy = M[3] * dx + M[4] * dy + M[5] * dz, sz = M[6] * dx + M[7] * dy + M[8] * dz;
+  if (!e) { out[0] = sx; out[1] = sy; out[2] = sz; return out; }
+  out[0] = fx + (sx - fx) * k; out[1] = fy + (sy - fy) * k; out[2] = fz + (sz - fz) * k;
+  return out;
+};
+// Render-space direction of a 3D tangent vector d at grid point (g, u, v), in the current blend.
+world.dirToRender = function (g, u, v, y, d) {
+  const V = world.view, k = V.k, e = unfold(V.f, g), M = V.M;
+  const s = [M[0] * d[0] + M[1] * d[1] + M[2] * d[2], M[3] * d[0] + M[4] * d[1] + M[5] * d[2], M[6] * d[0] + M[7] * d[1] + M[8] * d[2]];
+  if (!e) return s;
+  const fr = P.frame(g, u, v, y, {}), up = fr.up, dot = d[0] * up[0] + d[1] * up[1] + d[2] * up[2];
+  const [du, dv] = P.toGrid([d[0] - up[0] * dot, d[1] - up[1] * dot, d[2] - up[2] * dot], fr);
+  const U = e.A[0] * du + e.A[1] * dv, W = e.A[2] * du + e.A[3] * dv;
+  const l = Math.hypot(U, W) || 1, h = Math.hypot(d[0] - up[0] * dot, d[1] - up[1] * dot, d[2] - up[2] * dot);
+  const fl = [U / l * h, dot, -W / l * h];
+  return [fl[0] + (s[0] - fl[0]) * k, fl[1] + (s[1] - fl[1]) * k, fl[2] + (s[2] - fl[2]) * k];
 };
 
 function genChunk(f, cx, cz) {
@@ -113,7 +202,7 @@ function buildMesh(c) {
     if (t < lo) lo = t;
   }
   lo = Math.max(0, lo - 1);
-  const S = { p: [], c: [], i: [] }, W = { p: [], c: [], i: [] };
+  const S = { s: [], f: [], c: [], i: [] }, W = { s: [], f: [], c: [], i: [] };
   const blk = c.blocks, SL = CS * CS;
   const at = (x, y, z) => {
     if (y < 0) return B.BEDROCK; if (y >= H) return B.AIR;
@@ -122,14 +211,15 @@ function buildMesh(c) {
   };
   const vtx = (M, x, y, z, col) => {
     const o = (z * 17 + x) * 3, r = P.R + (y - P.SEA);
-    M.p.push(dirs[o] * r - anchor[0], dirs[o + 1] * r - anchor[1], dirs[o + 2] * r - anchor[2]);
+    M.s.push(dirs[o] * r - anchor[0], dirs[o + 1] * r - anchor[1], dirs[o + 2] * r - anchor[2]);
+    M.f.push(x, y, z);
     M.c.push(col[0], col[1], col[2]);
   };
   // quad from four (x, y, z) corners; flipped if its winding faces away from outward vector o
   const quad = (M, q, col, o) => {
-    const n = M.p.length / 3;
+    const n = M.s.length / 3;
     for (const v of q) vtx(M, v[0], v[1], v[2], col);
-    const p = M.p;
+    const p = M.s;
     const ax = p[(n + 1) * 3] - p[n * 3], ay = p[(n + 1) * 3 + 1] - p[n * 3 + 1], az = p[(n + 1) * 3 + 2] - p[n * 3 + 2];
     const bx = p[(n + 2) * 3] - p[n * 3], by = p[(n + 2) * 3 + 1] - p[n * 3 + 1], bz = p[(n + 2) * 3 + 2] - p[n * 3 + 2];
     const cxp = ay * bz - az * by, cyp = az * bx - ax * bz, czp = ax * by - ay * bx;
@@ -172,18 +262,19 @@ function buildMesh(c) {
     }
   }
   const group = new THREE.Group();
-  for (const [M, mat] of [[S, world.matSolid], [W, world.matWater]]) {
+  for (const [M, water] of [[S, false], [W, true]]) {
     if (!M.i.length) continue;
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(M.p, 3));
+    g.setAttribute("position", new THREE.Float32BufferAttribute(M.f, 3));
+    g.setAttribute("sphere", new THREE.Float32BufferAttribute(M.s, 3));
     g.setAttribute("color", new THREE.Float32BufferAttribute(M.c, 3));
-    g.setIndex(M.p.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(M.i, 1) : new THREE.Uint16BufferAttribute(M.i, 1));
-    g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, mat);
-    if (mat === world.matWater) m.renderOrder = 1;
+    g.setIndex(M.s.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(M.i, 1) : new THREE.Uint16BufferAttribute(M.i, 1));
+    const m = new THREE.Mesh(g, material(water));
+    m.frustumCulled = false;   // placement happens in the shader
+    if (water) m.renderOrder = 1;
     group.add(m);
   }
-  group.userData.anchor = anchor;
+  group.userData = { anchor, f, cx, cz };
   world.meshCount++;
   return group;
 }
@@ -192,11 +283,12 @@ function dropMesh(k) {
   const g = world.meshes.get(k);
   if (!g) return;
   world.scene.remove(g);
-  for (const m of g.children) m.geometry.dispose();
+  for (const m of g.children) { m.geometry.dispose(); m.material.dispose(); }
   world.meshes.delete(k);
 }
 
-// Chunks wanted around a grid position, nearest first (sampled in grid steps, so they run across face edges).
+// Chunks wanted around a grid position, nearest first. Sampled in the view face's flat grid: past one edge
+// a sample lands on the unfolded neighbour; past two edges it is inside a corner's empty wedge and skipped.
 let wantKey = null, want = [];
 function wanted(f, u, v) {
   const id = f + ":" + Math.floor(u / CS) + ":" + Math.floor(v / CS) + ":" + world.viewDist;
@@ -207,7 +299,9 @@ function wanted(f, u, v) {
   for (let dz = -V; dz <= V; dz++) for (let dx = -V; dx <= V; dx++) {
     const d2 = dx * dx + dz * dz;
     if (d2 > V * V + V) continue;
-    P.wrap(f, bu + dx * CS, bv + dz * CS, g);
+    const su = bu + dx * CS, sv = bv + dz * CS;
+    if ((su < 0 || su >= P.N) && (sv < 0 || sv >= P.N)) continue;
+    P.wrap(f, su, sv, g);
     const k = key(g.f, g.u >> 4, g.v >> 4);
     if (!seen.has(k) || seen.get(k).d2 > d2) seen.set(k, { k, f: g.f, cx: g.u >> 4, cz: g.v >> 4, d2 });
   }
@@ -216,9 +310,9 @@ function wanted(f, u, v) {
 }
 
 // Called each frame: builds missing or edited meshes within a time budget, drops far ones,
-// and places every mesh relative to the camera's 3D position.
-world.update = function (f, u, v, eye, budgetMs = 6) {
-  const list = wanted(f, u, v), keep = new Set();
+// and places every mesh for the current view (see world.view).
+world.update = function (budgetMs = 6) {
+  const V = world.view, list = wanted(V.f, V.u, V.v), keep = new Set();
   const t0 = performance.now();
   for (const e of list) {
     keep.add(e.k);
@@ -238,12 +332,38 @@ world.update = function (f, u, v, eye, budgetMs = 6) {
   if (world.chunks.size > list.length * 3) {
     for (const [k, c] of world.chunks) if (!keep.has(k) && !c.edited) world.chunks.delete(k);
   }
-  for (const g of world.meshes.values()) {
-    const a = g.userData.anchor;
-    g.position.set(a[0] - eye[0], a[1] - eye[1], a[2] - eye[2]);
-  }
+  for (const g of world.meshes.values()) place(g);
   return { wanted: list.length, meshed: world.meshes.size };
 };
+
+// Sets a chunk's two placements: flat (chunk-local grid -> unfolded view grid -> render space) and
+// round (anchor-relative sphere -> rotated by M, relative to the eye).
+// Face tints for the B key, so face edges and the three faces at a corner are easy to tell apart.
+const FACE_TINT = [[1, 0.78, 0.78], [0.8, 1, 0.8], [0.8, 0.85, 1], [1, 1, 0.7], [1, 0.8, 1], [0.75, 1, 1]];
+world.showFaces = false;
+function place(grp) {
+  const V = world.view, { anchor, f, cx, cz } = grp.userData, e = unfold(V.f, f), M = V.M;
+  const tint = world.showFaces ? FACE_TINT[f] : [1, 1, 1];
+  grp.visible = !!e || V.k >= 1;
+  if (!grp.visible) return;
+  const ax = anchor[0] - V.eye[0], ay = anchor[1] - V.eye[1], az = anchor[2] - V.eye[2];
+  for (const m of grp.children) {
+    const u = m.material.uniforms;
+    u.tint.value.setRGB(tint[0], tint[1], tint[2]);
+    u.sphM.value.set(
+      M[0], M[1], M[2], M[0] * ax + M[1] * ay + M[2] * az,
+      M[3], M[4], M[5], M[3] * ax + M[4] * ay + M[5] * az,
+      M[6], M[7], M[8], M[6] * ax + M[7] * ay + M[8] * az,
+      0, 0, 0, 1);
+    if (!e) { u.flatM.value.copy(u.sphM.value); continue; }   // never happens below k = 1
+    const A = e.A, u0 = cx * CS, v0 = cz * CS;
+    u.flatM.value.set(
+      A[0], 0, A[1], A[0] * u0 + A[1] * v0 + e.t[0] - V.u,
+      0, 1, 0, -V.eyeY,
+      -A[2], 0, -A[3], -(A[2] * u0 + A[3] * v0 + e.t[1] - V.v),
+      0, 0, 0, 1);
+  }
+}
 
 world.reset = function () {
   for (const k of [...world.meshes.keys()]) dropMesh(k);

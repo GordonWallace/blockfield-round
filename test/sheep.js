@@ -66,7 +66,7 @@ const fs = require("fs");
     const a = P.pos(m.f, m.u, m.v, m.y, [0, 0, 0]), e = P.pos(p.f, p.u, p.v, p.y, [0, 0, 0]);
     const up = P.dir(p.f, p.u, p.v, [0, 0, 0]), d = [a[0] - e[0], a[1] - e[1], a[2] - e[2]], k = d[0] * up[0] + d[1] * up[1] + d[2] * up[2];
     const h = [d[0] - up[0] * k, d[1] - up[1] * k, d[2] - up[2] * k], l = Math.hypot(...h);
-    p.heading = h.map((x) => x / l); p.pitch = -0.25;
+    p.setHeading(h.map((x) => x / l)); p.pitch = -0.25;
     p.y += 1.5; p.flying = true;
   });
   await page.waitForTimeout(3000);

@@ -59,10 +59,55 @@ function pos(f, u, v, y, out) {
   return out;
 }
 
-// Puts grid coordinates that ran off a face back onto the face they belong to.
+// Grid coordinates of a direction on a given face (no face choice; the direction may lie past its edge).
+function onFace(f, x, y, z, out) {
+  const F = FACES[f], d = x * F.n[0] + y * F.n[1] + z * F.n[2];
+  out.u = (Math.atan((x * F.a[0] + y * F.a[1] + z * F.a[2]) / d) / Q + 1) * N / 2;
+  out.v = (Math.atan((x * F.b[0] + y * F.b[1] + z * F.b[2]) / d) / Q + 1) * N / 2;
+  return out;
+}
+
+// Unfolding. Two faces that share an edge lie flat side by side exactly: grid rows line up one to one
+// along the edge, so the neighbour's grid is placed by a 90-degree rotation plus an offset.
+// EDGE[f][s] for side s (0: u < 0, 1: u >= N, 2: v < 0, 3: v >= N) is { g, A, t }, mapping neighbour g's
+// grid into f's grid extended past that side: U = A0 u + A1 v + t0, V = A2 u + A3 v + t1.
+// UNFOLD[f][g] is the same map looked up by neighbour face (undefined for f itself and the opposite face).
+const EDGE = [], UNFOLD = [];
+(function buildEdges() {
+  const d = [0, 0, 0], o = {};
+  for (let f = 0; f < 6; f++) {
+    EDGE[f] = []; UNFOLD[f] = [];
+    for (let s = 0; s < 4; s++) {
+      const out = [[-1, 0], [1, 0], [0, -1], [0, 1]][s];
+      const edge = (k) => [out[0] ? (out[0] < 0 ? 0 : N) : k * N, out[1] ? (out[1] < 0 ? 0 : N) : k * N];
+      const mid = edge(0.5);
+      dir(f, mid[0] + out[0] * N * 0.1, mid[1] + out[1] * N * 0.1, d);
+      const g = fromDir(d[0], d[1], d[2], {}).f;
+      const p = [edge(0.25), edge(0.75)], q = p.map((e) => { dir(f, e[0], e[1], d); onFace(g, d[0], d[1], d[2], o); return [o.u, o.v]; });
+      const ang = Math.atan2(p[1][1] - p[0][1], p[1][0] - p[0][0]) - Math.atan2(q[1][1] - q[0][1], q[1][0] - q[0][0]);
+      const c = Math.round(Math.cos(ang)), sn = Math.round(Math.sin(ang));
+      const A = [c, -sn, sn, c];
+      const t = [Math.round(p[0][0] - A[0] * q[0][0] - A[1] * q[0][1]), Math.round(p[0][1] - A[2] * q[0][0] - A[3] * q[0][1])];
+      EDGE[f][s] = UNFOLD[f][g] = { g, A, t, side: s };
+    }
+  }
+})();
+
+// Puts grid coordinates that ran off a face back onto the face they belong to. Past one edge this is the
+// exact unfold, so it agrees with how neighbouring faces are drawn; past two edges at once (only within
+// a corner's wedge) it falls back to the nearest point by direction.
 const tmp = [0, 0, 0];
-function wrap(f, u, v, out) {
+function wrap(f, u, v, out, depth = 0) {
   if (u >= 0 && u < N && v >= 0 && v < N) { out.f = f; out.u = u; out.v = v; return out; }
+  const offU = u < 0 || u >= N, offV = v < 0 || v >= N;
+  if (offU !== offV && depth < 3) {
+    const e = EDGE[f][offU ? (u < 0 ? 0 : 1) : (v < 0 ? 2 : 3)], A = e.A, x = u - e.t[0], y = v - e.t[1];
+    let nu = A[0] * x + A[2] * y, nv = A[1] * x + A[3] * y;
+    // a point exactly on the shared edge can land on the neighbour's far boundary line
+    if (nu >= N && nu - N < 1e-6) nu = N - 1e-9;
+    if (nv >= N && nv - N < 1e-6) nv = N - 1e-9;
+    return wrap(e.g, nu, nv, out, depth + 1);
+  }
   dir(f, u, v, tmp);
   fromDir(tmp[0], tmp[1], tmp[2], out);
   if (out.u >= N) out.u = N - 1e-9;
@@ -104,5 +149,5 @@ function toward(a, b) {
   return [t[0] / l, t[1] / l, t[2] / l];
 }
 
-BF.planet = { distance, toward, toGrid, N, R, SEA, H, FACES, dir, fromDir, pos, wrap, frame };
+BF.planet = { distance, toward, toGrid, N, R, SEA, H, FACES, EDGE, UNFOLD, dir, fromDir, onFace, pos, wrap, frame };
 })();
