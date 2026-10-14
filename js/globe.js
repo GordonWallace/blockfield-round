@@ -1,10 +1,10 @@
 // The whole planet as a coarse mesh (192 x 192 cells per face, about 850 blocks each), drawn only in the
-// round view, under and beyond the loaded chunks. Built a few rows per frame the first time it is needed.
+// round view, beyond the loaded chunks. Built a few rows per frame the first time it is needed.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
 const P = BF.planet, B = BF.B, world = BF.world;
-const M = 192, DROP = 4;   // cells per face edge; land sits a few blocks low so loaded chunks cover it
+const M = 192, DROP = 30;   // cells per face edge; land sits low, since the coarse mesh skips small hills
 
 const globe = (BF.globe = { group: null, faces: [], next: 0, done: false });
 
@@ -84,6 +84,10 @@ globe.update = function (k, budgetMs = 8) {
       R[6], R[7], R[8], R[6] * ax + R[7] * ay + R[8] * az,
       0, 0, 0, 1);
     u.flatM.value.copy(u.sphM.value);
+    // The coarse mesh can sit above real terrain (it skips small hills), so it leaves a hole under the
+    // loaded chunks. The hole is smaller than the loaded area because, near a face edge, the chunks chosen
+    // in the flat grid cover a sheared patch of the true sphere.
+    u.hole.value = world.viewDist * 16 * 0.65;
   }
 };
 })();

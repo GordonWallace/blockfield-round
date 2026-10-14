@@ -49,10 +49,13 @@ uniform mat4 sphM;
 uniform float k;
 varying vec3 vColor;
 varying float vDist;
+varying vec2 vXZ;
 void main() {
   vec3 a = (flatM * vec4(position, 1.0)).xyz;
   vec3 b = (sphM * vec4(sphere, 1.0)).xyz;
-  vec4 mv = viewMatrix * vec4(mix(a, b, k), 1.0);
+  vec3 w = mix(a, b, k);
+  vec4 mv = viewMatrix * vec4(w, 1.0);
+  vXZ = w.xz;
   vColor = color;
   vDist = length(mv.xyz);
   gl_Position = projectionMatrix * mv;
@@ -63,15 +66,18 @@ uniform float fogNear;
 uniform float fogFar;
 uniform float opacity;
 uniform vec3 tint;
+uniform float hole;
 varying vec3 vColor;
 varying float vDist;
+varying vec2 vXZ;
 void main() {
+  if (length(vXZ) < hole) discard;   // the planet mesh leaves a hole where real chunks are loaded
   gl_FragColor = vec4(mix(vColor * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
 }`;
 function material(water) {
   const m = new THREE.ShaderMaterial({
     vertexShader: VERT, fragmentShader: FRAG,
-    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) } },
+    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: 0 } },
     transparent: water, depthWrite: !water,
   });
   return m;
@@ -316,8 +322,8 @@ function wanted(f, u, v) {
 world.update = function (budgetMs = 6) {
   const V = world.view, list = wanted(V.f, V.u, V.v), keep = new Set();
   const t0 = performance.now();
+  for (const e of list) keep.add(e.k);
   for (const e of list) {
-    keep.add(e.k);
     const c = world.chunks.get(e.k);
     if (world.meshes.has(e.k) && c && !c.dirty) continue;
     if (performance.now() - t0 > budgetMs && world.meshes.has(e.k)) continue;
