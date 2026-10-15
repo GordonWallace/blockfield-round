@@ -1,23 +1,29 @@
-// Distant terrain: rings of height-field meshes around the player, each coarser than the last, so that
+// Distant terrain: rings of height-field meshes around the player, each twice as coarse as the last, so that
 // from high up the land well beyond the loaded chunks shows its real shape, colours and rivers.
 //
-// Level 0 has a cell every 4 blocks out to 512 blocks, then 16 out to 2 km, 64 out to 8 km and 256 out to
-// 33 km; past that the coarse globe takes over. Each ring is drawn only between the previous ring's edge and
-// its own (the shader discards the rest), and level 0 leaves a hole where real chunks are loaded. Rings are
-// built a few rows per frame and rebuilt around the player once they have moved a quarter of a ring away.
-// Each one is laid out on the player's face grid, unfolded across face edges like everything else, and
-// carries both flat and true-sphere positions, so it blends between views like the chunks do.
+// Level 0 has a cell every 4 blocks out to 512 blocks, then 8 out to 1 km, and so on to 256 out to 33 km;
+// past that the globe (globe.js) has the same 256-block detail everywhere. Each ring is drawn as a disc around
+// its own centre, minus the disc of the next finer ring and the loaded chunks, so a ring that is still being
+// rebuilt never leaves a gap: the coarser ring shows there instead. Across the outer part of its disc each
+// vertex moves to where the coarser ring would put it (shader MORPH in world.js), so detail fades level by
+// level instead of stepping. Rings are sampled by background workers (grid.js), reusing whatever part of
+// the old ring is still inside the new one, and rebuilt once the player has moved a fifth of a ring away.
+// A ring is hidden once its cells are smaller than a pixel or so, which, out at planet scale, leaves the
+// globe alone, with even detail.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
-const P = BF.planet, B = BF.B, world = BF.world, N = P.N;
-const LEVELS = [{ cell: 4, half: 512 }, { cell: 16, half: 2048 }, { cell: 64, half: 8192 }, { cell: 256, half: 32768 }];
-const SHOW_ABOVE = 40;   // blocks above the ground at which distant terrain is drawn
-const OVER = 1.25;       // a ring's mesh reaches this far past its drawn edge, so it still covers it while
-const MOVE = 0.2;        // the player moves up to this fraction of the ring away, before it is rebuilt
+const P = BF.planet, world = BF.world;
+const CELLS = [4, 8, 16, 32, 64, 128, 256];
+const HALF = 128, EXT = 136;   // cells from a ring's centre to the edge of its disc, and of its mesh
+const SHOW_ABOVE = 40;         // blocks above the ground at which distant terrain is drawn
+const HIDE = 1500;             // a ring is hidden above this many times its cell size (cells are then ~2 pixels)
+const MOVE = 0.2;              // a ring is rebuilt once the player is this fraction of its radius from its centre
+const HOLE = 0.97, MORPH0 = 0.6, MORPH1 = 0.95;   // fractions of a ring's radius
+const RIBBON_HIDE = 9000;      // rivers drawn as ribbons are hidden above this (narrower than a pixel)
 const WATER = [0.27, 0.43, 0.8], ICE = [0.66, 0.78, 0.94];
 
-const lod = (BF.lod = { group: null, levels: [], building: null, active: false });
+const lod = (BF.lod = { group: null, levels: [], active: false, top: null, eyeHole: 0 });
 
 lod.reset = function (scene) {
   if (lod.group) {
@@ -28,80 +34,172 @@ lod.reset = function (scene) {
   lod.ribbon = null;
   lod.group = new THREE.Group();
   scene.add(lod.group);
-  lod.levels = LEVELS.map((d) => ({ ...d, mesh: null, f: -1, cu: 0, cv: 0 }));
-  lod.building = null;
+  lod.levels = CELLS.map((cell) => ({ cell, half: cell * HALF, mesh: null, raw: null, building: null, f: -1, cu: 0, cv: 0, buildMs: 0, show: false }));
 };
 function dispose(m) { (m.parent || lod.group).remove(m); for (const x of m.isGroup ? m.children : [m]) { x.geometry.dispose(); x.material.dispose(); } }
 
-// The radius covered by built rings (0 if none yet), for fog and the far clip plane.
+// The radius covered by the coarsest ring drawn (0 if none), for fog and the far clip plane.
 lod.radius = function () {
   let r = 0;
-  for (const L of lod.levels) if (L.mesh && lod.active) r = L.half;
+  if (lod.active) for (const L of lod.levels) if (L.mesh && L.show) r = L.half;
   return r;
 };
 
-// Starts building level i around grid point (f, u, v).
-function start(i, f, u, v) {
-  const L = lod.levels[i], c = L.cell, ext = L.half * OVER, n = Math.round(2 * ext / c) + 1;
-  const cu = Math.round(u / (c * 4)) * c * 4, cv = Math.round(v / (c * 4)) * c * 4;
-  const u0 = Math.round(cu / 16) * 16, v0 = Math.round(cv / 16) * 16;   // mesh origin, on a chunk corner
-  lod.building = {
-    i, f, cu, cv, u0, v0, n, ext, row: 0, anchor: P.pos(f, u0, v0, P.SEA, [0, 0, 0]),
-    flat: new Float32Array(n * n * 3), sph: new Float32Array(n * n * 3), col: new Float32Array(n * n * 3),
-    hgt: new Float32Array(n * n), ok: new Uint8Array(n * n),
-  };
-}
-const w = {}, d = [0, 0, 0];
-function buildRow(b) {
-  const L = lod.levels[b.i], c = L.cell, T = world.terrain, j = b.row, drop = c / 4;
-  for (let i = 0; i < b.n; i++) {
-    const u = b.cu - b.ext + i * c, v = b.cv - b.ext + j * c, o = j * b.n + i;
-    if ((u < 0 || u >= N) && (v < 0 || v >= N)) continue;   // a cube corner's wedge: no face here
-    P.wrap(b.f, u, v, w);
-    const g = w.f, gu = Math.floor(w.u), gv = Math.floor(w.v);
-    P.dir(g, gu + 0.5, gv + 0.5, d);
-    const s = T.surface(g, gu, gv, d);
-    const water = s.wl > s.h;
-    const y = water ? s.wl + 0.875 - drop : s.h + 1 - drop;
-    let col = water ? (s.ice ? ICE : WATER) : world.topColour(s.top, s.biome);
-    // trees aren't drawn this far out, so forests darken the ground instead
-    if (!water) { const t = BF.climate.TREES[s.biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0); col = [col[0] * k, col[1] * k, col[2] * k]; }
-    b.ok[o] = 1; b.hgt[o] = y;
-    b.flat[o * 3] = u - b.u0; b.flat[o * 3 + 1] = y; b.flat[o * 3 + 2] = v - b.v0;
-    const r = P.R + (y - P.SEA);
-    b.sph[o * 3] = d[0] * r - b.anchor[0]; b.sph[o * 3 + 1] = d[1] * r - b.anchor[1]; b.sph[o * 3 + 2] = d[2] * r - b.anchor[2];
-    b.col[o * 3] = col[0]; b.col[o * 3 + 1] = col[1]; b.col[o * 3 + 2] = col[2];
+// ---- colours and shading (the globe uses these too, so the two match) ----
+// Colour of a sampled column: water by depth (ocean) or river blue, ice, or the top block in its biome,
+// darkened where trees grow (trees aren't drawn this far out).
+lod.colour = function (h, wl, top, biome, ice, out, o) {
+  let r, g, b;
+  if (wl > h) {
+    if (ice) [r, g, b] = ICE;
+    else if (wl <= P.SEA) { r = 0.18 + (h - 40) / 900; g = 0.3 + (h - 40) / 400; b = 0.72; }
+    else [r, g, b] = WATER;
+  } else {
+    const c = world.topColour(top, biome), t = BF.climate.TREES[biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0);
+    r = c[0] * k; g = c[1] * k; b = c[2] * k;
   }
-  b.row++;
+  out[o] = r; out[o + 1] = g; out[o + 2] = b;
+};
+// The drawn height of each sample: the water surface, or the top of the ground.
+lod.heights = function (raw) {
+  const y = new Float32Array(raw.h.length);
+  for (let o = 0; o < y.length; o++) y[o] = raw.wl[o] > raw.h[o] ? raw.wl[o] + 0.875 : raw.h[o] + 1;
+  return y;
+};
+// Slope shading of sample (i, j) of an nx x ny grid, measured s samples either side, in true 3D so it
+// agrees across faces: light from above, a little from one side of the planet's axis.
+const pa = [0, 0, 0], pb = [0, 0, 0];
+function point(raw, y, o, out) { const r = P.R + y[o] - P.SEA; out[0] = raw.dir[3 * o] * r; out[1] = raw.dir[3 * o + 1] * r; out[2] = raw.dir[3 * o + 2] * r; return out; }
+lod.shade = function (raw, y, nx, ny, i, j, s) {
+  const o = j * nx + i;
+  const at = (ii, jj) => { ii = Math.min(nx - 1, Math.max(0, ii)); jj = Math.min(ny - 1, Math.max(0, jj)); const q = jj * nx + ii; return raw.ok[q] ? q : o; };
+  point(raw, y, at(i + s, j), pa); point(raw, y, at(i - s, j), pb);
+  const ax = pa[0] - pb[0], ay = pa[1] - pb[1], az = pa[2] - pb[2];
+  point(raw, y, at(i, j + s), pa); point(raw, y, at(i, j - s), pb);
+  const bx = pa[0] - pb[0], by = pa[1] - pb[1], bz = pa[2] - pb[2];
+  let nx3 = ay * bz - az * by, ny3 = az * bx - ax * bz, nz3 = ax * by - ay * bx;
+  const ux = raw.dir[3 * o], uy = raw.dir[3 * o + 1], uz = raw.dir[3 * o + 2];
+  if (nx3 * ux + ny3 * uy + nz3 * uz < 0) { nx3 = -nx3; ny3 = -ny3; nz3 = -nz3; }
+  const nl = Math.hypot(nx3, ny3, nz3);
+  if (!nl) return 0.92;
+  // east (around the axis) and north at this point; the light comes from above, the east and the south
+  let ex = uz, ez = -ux;
+  const el = Math.hypot(ex, ez) || 1; ex /= el; ez /= el;
+  const tx = uy * ez, ty = uz * ex - ux * ez, tz = -uy * ex;
+  const lx = 0.8 * ux + 0.45 * ex - 0.4 * tx, ly = 0.8 * uy - 0.4 * ty, lz = 0.8 * uz + 0.45 * ez - 0.4 * tz;
+  return 0.6 + 0.4 * Math.max(0, (nx3 * lx + ny3 * ly + nz3 * lz) / (nl * Math.hypot(lx, ly, lz)));
+};
+
+// ---- rings ----
+const FIELDS = ["h", "wl", "top", "biome", "ice", "ok"];
+// Starts rebuilding ring L around grid point (cu, cv) of face f: copies what the old ring already has and
+// asks the workers for the rest.
+function start(L, f, cu, cv) {
+  const c = L.cell, n = 2 * EXT + 1, gu0 = cu - EXT * c, gv0 = cv - EXT * c;
+  const b = { f, cu, cv, gu0, gv0, n, pending: 0, t0: performance.now(), raw: BF.gridJob.alloc({ nx: n, ny: n }) };
+  let rects = [[0, n, 0, n]];   // [j0, j1, i0, i1] still to sample
+  const old = L.raw && L.f === f ? L : null;
+  if (old) {
+    const di = (gu0 - old.gu0) / c, dj = (gv0 - old.gv0) / c;
+    if (Math.abs(di) < n && Math.abs(dj) < n) {
+      const i0 = Math.max(0, -di), i1 = Math.min(n, n - di), j0 = Math.max(0, -dj), j1 = Math.min(n, n - dj);
+      for (let j = j0; j < j1; j++) {
+        const d = j * n, s = (j + dj) * n + di;
+        for (const k of FIELDS) b.raw[k].set(old.raw[k].subarray(s + i0, s + i1), d + i0);
+        b.raw.dir.set(old.raw.dir.subarray(3 * (s + i0), 3 * (s + i1)), 3 * (d + i0));
+      }
+      rects = [];
+      if (j0 > 0) rects.push([0, j0, 0, n]);
+      if (j1 < n) rects.push([j1, n, 0, n]);
+      if (i0 > 0) rects.push([j0, j1, 0, i0]);
+      if (i1 < n) rects.push([j0, j1, i1, n]);
+    }
+  }
+  L.building = b;
+  const prio = CELLS.indexOf(c);
+  for (const [j0, j1, i0, i1] of rects) {
+    const w = i1 - i0, step = Math.max(1, Math.floor(6000 / w));
+    for (let j = j0; j < j1; j += step) {
+      const job = { f, u0: gu0 + i0 * c, v0: gv0 + j * c, cell: c, nx: w, ny: Math.min(step, j1 - j), clamp: false };
+      b.pending++;
+      BF.sampler.request(job, prio, (res) => {
+        if (L.building !== b) return;
+        for (let jj = 0; jj < job.ny; jj++) {
+          const s = jj * w, d = (j + jj) * n + i0;
+          for (const k of FIELDS) b.raw[k].set(res[k].subarray(s, s + w), d);
+          b.raw.dir.set(res.dir.subarray(3 * s, 3 * (s + w)), 3 * d);
+        }
+        if (--b.pending === 0) finish(L, b);
+      }, L);
+    }
+  }
+  if (!b.pending) finish(L, b);
 }
-function finish(b) {
-  const L = lod.levels[b.i], n = b.n, c = L.cell, idx = [];
-  // shade by slope so relief reads from above (light from the u, -v side)
-  const lx = 0.45, ly = 0.8, lz = -0.4, ll = Math.hypot(lx, ly, lz);
+
+// Builds ring L's mesh from its samples.
+function finish(L, b) {
+  const n = b.n, c = L.cell, raw = b.raw, NV = n * n, y = lod.heights(raw);
+  const anchor = P.pos(b.f, b.cu, b.cv, P.SEA, [0, 0, 0]);
+  const flat = new Float32Array(NV * 3), sph = new Float32Array(NV * 3), base = new Float32Array(NV * 3), col = new Float32Array(NV * 3);
+  const mflat = new Float32Array(NV * 3), msph = new Float32Array(NV * 3), mcol = new Float32Array(NV * 3);
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     const o = j * n + i;
-    if (!b.ok[o]) continue;
-    const hx = (b.hgt[j * n + Math.min(n - 1, i + 1)] - b.hgt[j * n + Math.max(0, i - 1)]) / (2 * c);
-    const hz = (b.hgt[Math.min(n - 1, j + 1) * n + i] - b.hgt[Math.max(0, j - 1) * n + i]) / (2 * c);
-    const nl = Math.hypot(hx, 1, hz), sh = 0.6 + 0.4 * Math.max(0, (-hx * lx + ly - hz * lz) / (nl * ll));
-    for (let k = 0; k < 3; k++) b.col[o * 3 + k] *= sh;
+    if (!raw.ok[o]) continue;
+    const r = P.R + y[o] - P.SEA;
+    flat[o * 3] = b.gu0 + i * c - b.cu; flat[o * 3 + 1] = y[o]; flat[o * 3 + 2] = b.gv0 + j * c - b.cv;
+    for (let k = 0; k < 3; k++) sph[o * 3 + k] = raw.dir[o * 3 + k] * r - anchor[k];
+    lod.colour(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], raw.ice[o], base, o * 3);
+    const sh = lod.shade(raw, y, n, n, i, j, 1);
+    for (let k = 0; k < 3; k++) col[o * 3 + k] = base[o * 3 + k] * sh;
   }
+  // morph targets: a point on the coarser ring's grid (even i and j) stays put and takes the coarser ring's
+  // shading; any other point goes to the middle of the coarser triangle edge it lies on (that ring's cells
+  // are split along the same diagonal as these, below)
+  for (let j = 0; j < n; j += 2) for (let i = 0; i < n; i += 2) {
+    const o = j * n + i;
+    if (!raw.ok[o]) continue;
+    const sh = lod.shade(raw, y, n, n, i, j, 2);
+    for (let k = 0; k < 3; k++) { mflat[o * 3 + k] = flat[o * 3 + k]; msph[o * 3 + k] = sph[o * 3 + k]; mcol[o * 3 + k] = base[o * 3 + k] * sh; }
+  }
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (!(i & 1) && !(j & 1)) continue;
+    const o = j * n + i;
+    if (!raw.ok[o]) continue;
+    let a, e;
+    if (!(j & 1)) { a = o - 1; e = o + 1; }               // on a row of the coarser grid
+    else if (!(i & 1)) { a = o - n; e = o + n; }          // on a column
+    else { a = o - n + 1; e = o + n - 1; }                // on a cell's diagonal: (i + 1, j - 1) to (i - 1, j + 1)
+    if (!raw.ok[a] || !raw.ok[e]) {
+      for (let k = 0; k < 3; k++) { mflat[o * 3 + k] = flat[o * 3 + k]; msph[o * 3 + k] = sph[o * 3 + k]; mcol[o * 3 + k] = col[o * 3 + k]; }
+      continue;
+    }
+    for (let k = 0; k < 3; k++) {
+      mflat[o * 3 + k] = (flat[a * 3 + k] + flat[e * 3 + k]) / 2;
+      msph[o * 3 + k] = (sph[a * 3 + k] + sph[e * 3 + k]) / 2;
+      mcol[o * 3 + k] = (mcol[a * 3 + k] + mcol[e * 3 + k]) / 2;
+    }
+  }
+  const idx = [];
   for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
     const a = j * n + i;
-    if (b.ok[a] && b.ok[a + 1] && b.ok[a + n] && b.ok[a + n + 1]) idx.push(a, a + 1, a + n, a + 1, a + n + 1, a + n);   // counter-clockwise seen from above
+    if (raw.ok[a] && raw.ok[a + 1] && raw.ok[a + n] && raw.ok[a + n + 1]) idx.push(a, a + 1, a + n, a + 1, a + n + 1, a + n);   // counter-clockwise seen from above
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(b.flat, 3));
-  g.setAttribute("sphere", new THREE.BufferAttribute(b.sph, 3));
-  g.setAttribute("color", new THREE.BufferAttribute(b.col, 3));
+  g.setAttribute("position", new THREE.BufferAttribute(flat, 3));
+  g.setAttribute("sphere", new THREE.BufferAttribute(sph, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  g.setAttribute("mflat", new THREE.BufferAttribute(mflat, 3));
+  g.setAttribute("msph", new THREE.BufferAttribute(msph, 3));
+  g.setAttribute("mcol", new THREE.BufferAttribute(mcol, 3));
   g.setIndex(new THREE.Uint32BufferAttribute(idx, 1));
-  const mesh = new THREE.Mesh(g, world.material(false));
+  const mesh = new THREE.Mesh(g, world.material(false, "morph"));
   mesh.frustumCulled = false;
   const grp = new THREE.Group();
   grp.add(mesh);
-  grp.userData = { anchor: b.anchor, f: b.f, cx: b.u0 / 16, cz: b.v0 / 16 };
+  grp.userData = { anchor, f: b.f, cx: b.cu / 16, cz: b.cv / 16 };
   if (L.mesh) dispose(L.mesh);
-  L.mesh = grp; L.f = b.f; L.cu = b.cu; L.cv = b.cv;
+  L.mesh = grp; L.raw = raw; L.f = b.f; L.cu = b.cu; L.cv = b.cv; L.gu0 = b.gu0; L.gv0 = b.gv0;
+  L.buildMs = performance.now() - b.t0; L.building = null;
   lod.group.add(grp);
 }
 
@@ -126,7 +224,8 @@ function ribbons(f, cu, cv, ext) {
       const x = c.xs[k], y = c.ys[k];
       const k0 = Math.max(0, k - 1), k1 = Math.min(K, k + 1), tx = c.xs[k1] - c.xs[k0], ty = c.ys[k1] - c.ys[k0], tl = Math.hypot(tx, ty) || 1;
       const nx = -ty / tl * hw, ny = tx / tl * hw;
-      const h = (prof ? prof[k] : r0 + (r1 - r0) * k / K) + 0.9;
+      // lifted by half a ring cell at this distance, since coarse cells bridge across narrow valleys
+      const h = (prof ? prof[k] : r0 + (r1 - r0) * k / K) + 0.9 + Math.hypot(x - cu, y - cv) / (2 * HALF);
       const base = flat.length / 3;
       for (const sgn of [-1, 1]) {
         const px = x + nx * sgn, py = y + ny * sgn;
@@ -155,7 +254,7 @@ function ribbons(f, cu, cv, ext) {
   lod.group.add(grp);
 }
 
-// How far the view point is from level L's centre, in blocks of the view face's grid (Infinity if L's face
+// How far the view point is from ring L's centre, in blocks of the view face's grid (Infinity if L's face
 // can't be unfolded next to it).
 function offset(L, V) {
   if (L.f < 0) return Infinity;
@@ -166,40 +265,66 @@ function offset(L, V) {
 }
 
 // Called each frame with the player's height above the ground.
+let last = null, speed = 0;
 lod.update = function (above, budgetMs = 6) {
-  const V = world.view;
+  const V = world.view, now = performance.now();
+  BF.sampler.tick(budgetMs);
+  // speed over the ground (blocks per second), to skip rebuilding rings the player is outrunning
+  if (last && last.f === V.f && now > last.t) {
+    const dt = (now - last.t) / 1000;
+    speed += (Math.hypot(V.u - last.u, V.v - last.v) / dt - speed) * Math.min(1, dt * 2);
+  }
+  last = { f: V.f, u: V.u, v: V.v, t: now };
   lod.active = above > SHOW_ABOVE || V.k > 0;
   lod.group.visible = lod.active;
-  if (!lod.active) return;
-  // river ribbons cover the largest ring; they are quick, so they come first
+  if (!lod.active) { lod.top = null; return; }
+  // river ribbons cover the largest ring; they are quick, so they are built here
   const top = lod.levels[lod.levels.length - 1];
-  if (!lod.ribbon || offset({ f: lod.ribbon.userData.f, cu: lod.ribbonAt[0], cv: lod.ribbonAt[1] }, V) > top.half * MOVE) {
+  if (above < RIBBON_HIDE && (!lod.ribbon || offset({ f: lod.ribbon.userData.f, cu: lod.ribbonAt[0], cv: lod.ribbonAt[1] }, V) > top.half * MOVE)) {
     const c = top.cell * 4, cu = Math.round(V.u / c) * c, cv = Math.round(V.v / c) * c;
-    ribbons(V.f, cu, cv, top.half * OVER);
+    ribbons(V.f, cu, cv, top.half * EXT / HALF);
     lod.ribbonAt = [cu, cv];
   }
-  const t0 = performance.now();
-  while (performance.now() - t0 < budgetMs) {
-    if (!lod.building) {
-      // the finest ring that is missing or off centre
-      const i = lod.levels.findIndex((L) => offset(L, V) > L.half * MOVE);
-      if (i < 0) break;
-      start(i, V.f, V.u, V.v);
-    }
-    const b = lod.building;
-    buildRow(b);
-    if (b.row >= b.n) { finish(b); lod.building = null; }
+  for (const L of lod.levels) {
+    L.show = above < HIDE * L.cell;
+    if (!L.show) { if (L.building) { BF.sampler.cancel(L); L.building = null; } continue; }
+    if (L.building || (L.mesh && offset(L, V) <= MOVE * L.half)) continue;
+    // too fast for this ring to keep up: leave it where it is (coarser rings fill in) until the player slows
+    if (L.mesh && speed * L.buildMs / 1000 > 0.5 * L.half) continue;
+    const c = L.cell * 4;
+    start(L, V.f, Math.round(V.u / c) * c, Math.round(V.v / c) * c);
   }
-  // place, and cut each ring to the band between the previous ring (or the loaded chunks) and its edge
-  let inner = Math.min(world.viewDist * 16, world.covered || 0) * (V.k > 0 ? 0.65 : 0.9);
-  if (lod.ribbon) { world.place(lod.ribbon); lod.ribbon.children[0].material.uniforms.hole.value = inner; }
+  // place, and cut each ring to its disc, minus the next finer ring's disc and the loaded chunks; the discs
+  // are measured in the grid each mesh is laid out on (a ring's own centre is its origin)
+  lod.eyeHole = Math.min(world.viewDist * 16, world.covered || 0) * 0.95;
+  if (lod.ribbon) {
+    world.place(lod.ribbon);
+    if (above >= RIBBON_HIDE) lod.ribbon.visible = false;
+    const d = lod.ribbon.userData;
+    disc(lod.ribbon.children[0].material.uniforms.hole.value, d.f, d.cx * 16, d.cz * 16, V.f, V.u, V.v, lod.eyeHole);
+  }
+  let prev = null;
   for (const L of lod.levels) {
     if (!L.mesh) continue;
     world.place(L.mesh);
-    const u = L.mesh.children[0].material.uniforms;
-    // rings overlap a little (each coarser ring sits lower), so no gap opens between them
-    u.hole.value = inner; u.outer.value = L.half * 0.97;
-    inner = L.half * 0.95;
+    if (!L.show) L.mesh.visible = false;
+    if (!L.mesh.visible) continue;
+    const u = L.mesh.children[0].material.uniforms, coarsest = L === top;
+    disc(u.hole.value, L.f, L.cu, L.cv, V.f, V.u, V.v, lod.eyeHole);
+    if (prev) disc(u.hole2.value, L.f, L.cu, L.cv, prev.f, prev.cu, prev.cv, prev.half * HOLE); else u.hole2.value.set(0, 0, 0);
+    u.outer.value.set(0, 0, L.half);
+    u.morph.value.set(coarsest ? 1e30 : L.half * MORPH0, coarsest ? 2e30 : L.half * MORPH1);
+    prev = L;
   }
+  lod.top = prev;
 };
+
+// Sets out (x, z, radius) to a disc of radius r around point (u, v) of face g, in the grid of face f
+// relative to (cu, cv); no disc if g can't be unfolded next to f.
+function disc(out, f, cu, cv, g, u, v, r) {
+  const e = world.unfold(f, g);
+  if (!e) { out.set(0, 0, 0); return; }
+  out.set(e.A[0] * u + e.A[1] * v + e.t[0] - cu, e.A[2] * u + e.A[3] * v + e.t[1] - cv, r);
+}
+lod.disc = disc;
 })();

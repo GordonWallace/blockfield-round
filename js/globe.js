@@ -1,91 +1,118 @@
-// The whole planet as a coarse mesh (192 x 192 cells per face, about 850 blocks each), drawn only in the
-// round view, beyond the loaded chunks. Built a few rows per frame the first time it is needed.
+// The whole planet as one even mesh, 640 x 640 cells per face (256 blocks each, the detail of the coarsest
+// distant-terrain ring, so the two meet without a seam), drawn only in the round view, beyond the loaded
+// chunks and the distant-terrain rings. Out at planet scale the rings are hidden and this is all there is.
+//
+// Each face is cut into 10 x 10 tiles, sampled by the background workers (grid.js), nearest the view
+// first, from the moment a world starts. Tiles beyond the horizon aren't drawn.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
-const P = BF.planet, B = BF.B, world = BF.world;
-const M = 192, DROP = 30;   // cells per face edge; land sits low, since the coarse mesh skips small hills
+const P = BF.planet, world = BF.world;
+const M = 640, T = 64, CELL = P.N / M, TILES = M / T;   // cells per face edge, cells per tile edge
+const PEAK = Math.acos(P.R / (P.R + 300));               // how far past the horizon a mountain top still shows
 
-const globe = (BF.globe = { group: null, faces: [], next: 0, done: false });
+const globe = (BF.globe = { group: null, tiles: [], materials: [], built: 0 });
 
-// Colours match the distant-terrain rings (lod.js): block top colours, with forests darkened.
-function colour(s) {
-  if (s.h < P.SEA) return s.ice ? [0.66, 0.78, 0.94] : [0.18 + (s.h - 40) / 900, 0.3 + (s.h - 40) / 400, 0.72];
-  const c = world.topColour(s.top, s.biome), t = BF.climate.TREES[s.biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0);
-  return [c[0] * k, c[1] * k, c[2] * k];
-}
-
-// One face, built row by row: { anchor, rows, pos, col }.
-function startFace(f) {
-  const anchor = P.pos(f, P.N / 2, P.N / 2, P.SEA, [0, 0, 0]);
-  return { f, anchor, row: 0, pos: new Float32Array((M + 1) * (M + 1) * 3), col: new Float32Array((M + 1) * (M + 1) * 3) };
-}
-function buildRow(F) {
-  const d = [0, 0, 0], T = world.terrain, j = F.row;
-  for (let i = 0; i <= M; i++) {
-    P.dir(F.f, i / M * P.N, j / M * P.N, d);
-    const s = T.sample(d[0], d[1], d[2], false);
-    const r = P.R + (s.h < P.SEA ? -1.5 : s.h - P.SEA - DROP), o = (j * (M + 1) + i) * 3, c = colour(s);
-    F.pos[o] = d[0] * r - F.anchor[0]; F.pos[o + 1] = d[1] * r - F.anchor[1]; F.pos[o + 2] = d[2] * r - F.anchor[2];
-    F.col[o] = c[0]; F.col[o + 1] = c[1]; F.col[o + 2] = c[2];
+// All tiles share one vertex order, split along the same diagonal as the rings (lod.js) so the coarsest
+// ring and the globe match.
+const n = T + 1, index = (() => {
+  const a = new Uint16Array(T * T * 6);
+  let k = 0;
+  for (let j = 0; j < T; j++) for (let i = 0; i < T; i++) {
+    const o = j * n + i;
+    a.set([o, o + 1, o + n, o + 1, o + n + 1, o + n], k); k += 6;
   }
-  F.row++;
+  return new THREE.BufferAttribute(a, 1);
+})();
+
+// Tile (f, ti, tj): samples one beyond each edge too, for slope shading.
+function request(f, ti, tj) {
+  const d = [0, 0, 0], c = [0, 0, 0], tile = { f, ti, tj, dir: [0, 0, 0], radius: 0, mesh: null };
+  for (const [a, b] of [[0, 0], [T, 0], [0, T], [T, T]]) {
+    P.dir(f, (ti * T + a) * CELL, (tj * T + b) * CELL, d);
+    c[0] += d[0]; c[1] += d[1]; c[2] += d[2];
+  }
+  const l = Math.hypot(c[0], c[1], c[2]);
+  tile.dir = [c[0] / l, c[1] / l, c[2] / l];
+  P.dir(f, ti * T * CELL, tj * T * CELL, d);
+  tile.radius = Math.acos(Math.min(1, d[0] * tile.dir[0] + d[1] * tile.dir[1] + d[2] * tile.dir[2])) * 1.05;
+  globe.tiles.push(tile);
+  const job = { f, u0: (ti * T - 1) * CELL, v0: (tj * T - 1) * CELL, cell: CELL, nx: T + 3, ny: T + 3, clamp: true, exact: true };
+  // nearest the view first
+  const prio = () => {
+    const e = world.view.eye, el = Math.hypot(e[0], e[1], e[2]) || 1;
+    return 100 + Math.acos(Math.max(-1, Math.min(1, (e[0] * tile.dir[0] + e[1] * tile.dir[1] + e[2] * tile.dir[2]) / el)));
+  };
+  BF.sampler.request(job, prio, (raw) => build(tile, raw), globe);
 }
-function finishFace(F) {
-  const idx = new Uint32Array(M * M * 6);
-  let n = 0;
-  for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
-    const a = j * (M + 1) + i;
-    // a x b = n on every face, so this winding faces outward
-    idx.set([a, a + 1, a + M + 2, a, a + M + 2, a + M + 1], n); n += 6;
+
+function build(tile, raw) {
+  const W = T + 3, y = BF.lod.heights(raw), pos = new Float32Array(n * n * 3), col = new Uint8Array(n * n * 3), grid = new Float32Array(n * n * 2), c = [0, 0, 0];
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const o = (j + 1) * W + i + 1, v = (j * n + i) * 3, r = P.R + y[o] - P.SEA;
+    for (let k = 0; k < 3; k++) pos[v + k] = raw.dir[o * 3 + k] * r;
+    BF.lod.colour(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], raw.ice[o], c, 0);
+    const sh = BF.lod.shade(raw, y, W, W, i + 1, j + 1, 1);
+    for (let k = 0; k < 3; k++) col[v + k] = Math.round(Math.min(1, c[k] * sh) * 255);
+    grid[(j * n + i) * 2] = (tile.ti * T + i) * CELL; grid[(j * n + i) * 2 + 1] = (tile.tj * T + j) * CELL;
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(F.pos, 3));
-  g.setAttribute("sphere", new THREE.BufferAttribute(F.pos, 3));
-  g.setAttribute("color", new THREE.BufferAttribute(F.col, 3));
-  g.setIndex(new THREE.BufferAttribute(idx, 1));
-  const mesh = new THREE.Mesh(g, world.material(false));
+  const p = new THREE.BufferAttribute(pos, 3);
+  g.setAttribute("position", p);
+  g.setAttribute("sphere", p);
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
+  g.setAttribute("grid", new THREE.BufferAttribute(grid, 2));
+  g.setIndex(index);
+  const mesh = new THREE.Mesh(g, globe.materials[tile.f]);
   mesh.frustumCulled = false;
-  mesh.userData.anchor = F.anchor;
+  tile.mesh = mesh;
   globe.group.add(mesh);
+  globe.built++;
 }
 
 globe.reset = function (scene) {
-  if (globe.group) { scene.remove(globe.group); for (const m of globe.group.children) { m.geometry.dispose(); m.material.dispose(); } }
+  if (globe.group) {
+    scene.remove(globe.group);
+    for (const m of globe.group.children) m.geometry.dispose();
+    for (const m of globe.materials) m.dispose();
+  }
+  BF.sampler.cancel(globe);
   globe.group = new THREE.Group();
   globe.group.renderOrder = -1;
   scene.add(globe.group);
-  globe.faces = []; globe.next = 0; globe.done = false; globe.building = null;
+  // one material per face, each with its own map into the view face's grid (for the holes)
+  globe.materials = [0, 1, 2, 3, 4, 5].map(() => world.material(false, "globe"));
+  globe.tiles = []; globe.built = 0;
+  for (let f = 0; f < 6; f++) for (let tj = 0; tj < TILES; tj++) for (let ti = 0; ti < TILES; ti++) request(f, ti, tj);
 };
 
-// Called each frame with the current blend: builds within a time budget while needed, and places faces.
-globe.update = function (k, budgetMs = 8) {
+// Called each frame with the current blend: places the globe and hides tiles beyond the horizon.
+globe.update = function (k) {
   globe.group.visible = k > 0;
   if (k <= 0) return;
-  const t0 = performance.now();
-  while (!globe.done && performance.now() - t0 < budgetMs) {
-    if (!globe.building) globe.building = startFace(globe.next);
-    buildRow(globe.building);
-    if (globe.building.row > M) {
-      finishFace(globe.building);
-      globe.building = null;
-      if (++globe.next === 6) globe.done = true;
-    }
-  }
-  const V = world.view, R = V.M;
-  for (const m of globe.group.children) {
-    const a = m.userData.anchor, ax = a[0] - V.eye[0], ay = a[1] - V.eye[1], az = a[2] - V.eye[2];
-    const u = m.material.uniforms;
+  const V = world.view, R = V.M, e = V.eye, el = Math.hypot(e[0], e[1], e[2]);
+  // positions are relative to the planet's centre; a hole where the loaded chunks are, and one where the
+  // coarsest distant-terrain ring is drawn (measured in the view face's grid)
+  const top = BF.lod.top, L = BF.lod;
+  for (let f = 0; f < 6; f++) {
+    const u = globe.materials[f].uniforms;
     u.sphM.value.set(
-      R[0], R[1], R[2], R[0] * ax + R[1] * ay + R[2] * az,
-      R[3], R[4], R[5], R[3] * ax + R[4] * ay + R[5] * az,
-      R[6], R[7], R[8], R[6] * ax + R[7] * ay + R[8] * az,
+      R[0], R[1], R[2], -(R[0] * e[0] + R[1] * e[1] + R[2] * e[2]),
+      R[3], R[4], R[5], -(R[3] * e[0] + R[4] * e[1] + R[5] * e[2]),
+      R[6], R[7], R[8], -(R[6] * e[0] + R[7] * e[1] + R[8] * e[2]),
       0, 0, 0, 1);
     u.flatM.value.copy(u.sphM.value);
-    // The coarse mesh can sit above real terrain (it skips small hills), so it leaves a hole under the
-    // loaded chunks. The hole is smaller than the loaded area because, near a face edge, the chunks chosen
-    // in the flat grid cover a sheared patch of the true sphere.
-    u.hole.value = Math.max(world.viewDist * 16 * 0.65, BF.lod ? BF.lod.radius() * 0.97 : 0);
+    const m = world.unfold(V.f, f);
+    if (!m) { u.hole.value.set(0, 0, 0); u.hole2.value.set(0, 0, 0); continue; }   // the far side
+    u.unf.value.set(m.A[0], m.A[1], m.t[0], m.A[2], m.A[3], m.t[1], 0, 0, 1);
+    L.disc(u.hole.value, V.f, 0, 0, V.f, V.u, V.v, Math.max(L.eyeHole, world.viewDist * 16 * 0.9));
+    if (top) L.disc(u.hole2.value, V.f, 0, 0, top.f, top.cu, top.cv, top.half * 0.97); else u.hole2.value.set(0, 0, 0);
+  }
+  const horizon = Math.acos(Math.min(1, P.R / Math.max(P.R, el))) + PEAK;
+  for (const t of globe.tiles) {
+    if (!t.mesh) continue;
+    const a = Math.acos(Math.max(-1, Math.min(1, (e[0] * t.dir[0] + e[1] * t.dir[1] + e[2] * t.dir[2]) / el)));
+    t.mesh.visible = a < horizon + t.radius;
   }
 };
 })();

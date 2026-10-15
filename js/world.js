@@ -55,14 +55,39 @@ uniform mat4 sphM;
 uniform float k;
 varying vec3 vColor;
 varying float vDist;
-varying vec2 vXZ;
+varying vec2 vG;
+#ifdef MORPH
+// distant terrain: each vertex also carries where the next coarser ring would put it (and its colour there),
+// and moves there across the outer part of its ring, so one level of detail fades into the next
+attribute vec3 mflat;
+attribute vec3 msph;
+attribute vec3 mcol;
+uniform vec2 morph;   // grid distances from the ring's centre where morphing starts and ends
+#endif
+#ifdef GLOBE
+attribute vec2 grid;  // the globe: grid position on its own face, and the map into the view face's grid
+uniform mat3 unf;
+#endif
 void main() {
   vec3 a = (flatM * vec4(position, 1.0)).xyz;
   vec3 b = (sphM * vec4(sphere, 1.0)).xyz;
+  vec3 col = color;
+#ifdef MORPH
+  float m = smoothstep(morph.x, morph.y, length(position.xz));
+  if (m > 0.0) {
+    a = mix(a, (flatM * vec4(mflat, 1.0)).xyz, m);
+    b = mix(b, (sphM * vec4(msph, 1.0)).xyz, m);
+    col = mix(color, mcol, m);
+  }
+#endif
+#ifdef GLOBE
+  vG = (unf * vec3(grid, 1.0)).xy;
+#else
+  vG = position.xz;
+#endif
   vec3 w = mix(a, b, k);
   vec4 mv = viewMatrix * vec4(w, 1.0);
-  vXZ = w.xz;
-  vColor = color;
+  vColor = col;
   vDist = length(mv.xyz);
   gl_Position = projectionMatrix * mv;
 }`;
@@ -72,20 +97,36 @@ uniform float fogNear;
 uniform float fogFar;
 uniform float opacity;
 uniform vec3 tint;
-uniform float hole;
-uniform float outer;
+uniform vec3 hole;
+uniform vec3 hole2;
+uniform vec3 outer;
 varying vec3 vColor;
 varying float vDist;
-varying vec2 vXZ;
+varying vec2 vG;
 void main() {
-  // distant terrain leaves a hole where finer terrain is drawn, and the finer rings stop at their edge
-  if (length(vXZ) < hole || (outer > 0.0 && length(vXZ) > outer)) discard;
+  // distant terrain leaves a hole where the loaded chunks are and one where the next finer ring is drawn,
+  // and each ring stops at its own edge: discs (centre x, z; radius) in the mesh's own grid, so they line
+  // up exactly with the grids the chunks and rings are laid out on
+  bool inner = hole2.z > 0.0 && length(vG - hole2.xy) < hole2.z;
+#ifdef GLOBE
+  // The rings can't join the two faces that meet beyond a cube corner (they have no samples in the corner's
+  // empty wedge), which leaves a crack about one ring cell wide along that edge: the globe fills it.
+  bool ou = vG.x < 0.0 || vG.x > FACE_N, ov = vG.y < 0.0 || vG.y > FACE_N;
+  float seam = 2.0 * max(8.0, length(vG - hole.xy) / 64.0);   // a ring cell is 1/128 to 1/64 of its distance
+  if ((ou && ov) || (ou && min(vG.y, FACE_N - vG.y) < seam) || (ov && min(vG.x, FACE_N - vG.x) < seam)) inner = false;
+#endif
+  if ((hole.z > 0.0 && length(vG - hole.xy) < hole.z) || inner || (outer.z > 0.0 && length(vG - outer.xy) > outer.z)) discard;
   gl_FragColor = vec4(mix(vColor * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
 }`;
-function material(water) {
+// kind: "morph" for distant-terrain rings, "globe" for the globe.
+function material(water, kind = null) {
   const m = new THREE.ShaderMaterial({
-    vertexShader: VERT, fragmentShader: FRAG,
-    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: 0 }, outer: { value: 0 } },
+    vertexShader: VERT, fragmentShader: FRAG, defines: kind === "morph" ? { MORPH: 1 } : kind === "globe" ? { GLOBE: 1, FACE_N: P.N.toFixed(1) } : {},
+    uniforms: {
+      ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 },
+      tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: new THREE.Vector3() }, hole2: { value: new THREE.Vector3() }, outer: { value: new THREE.Vector3() },
+      morph: { value: new THREE.Vector2(1e30, 2e30) }, unf: { value: new THREE.Matrix3() },
+    },
     transparent: water, depthWrite: !water,
   });
   return m;

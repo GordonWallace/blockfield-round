@@ -7,6 +7,7 @@ const fs = require("fs");
   const [url, out, three] = process.argv.slice(2);
   const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.setDefaultTimeout(180000);   // software rendering of the whole globe is slow
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });

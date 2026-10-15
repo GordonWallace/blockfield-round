@@ -49,11 +49,16 @@ Run it with `./run.sh` and open http://localhost:8000.
   its level and cuts a valley through. Nothing is ever built up to carry a river. Rivers that join meet at one
   level, and rivers freeze over in the arctic band. `node tools/river-check.js`
   proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
-- **Distant terrain** (`js/lod.js`). Beyond the loaded chunks, rings of height-field meshes show the land at
-  4, 16, 64 and 256 blocks per cell, out to 33 km, with the same colours as the blocks (forests darkened, since
-  trees aren't drawn there). Rivers are drawn out there as ribbons along their curves, at least 6 blocks wide,
-  so the whole network shows from high up. The rings appear once you are 40 blocks above the ground, build a
-  few rows per frame, and rebuild around you as you travel; the coarse globe covers the rest of the planet.
+- **Distant terrain** (`js/lod.js`, `js/globe.js`). Beyond the loaded chunks, seven rings of height-field
+  meshes show the land at 4, 8, 16 and on up to 256 blocks per cell, out to 33 km, with the same colours as the
+  blocks (forests darkened, since trees aren't drawn there). Each ring morphs into the next across its outer
+  part, so detail fades with distance instead of stepping, and each is drawn as a disc around its own centre
+  minus the next finer ring, so a ring still being rebuilt leaves the coarser one showing, never a gap. Rivers
+  are drawn out there as ribbons along their curves, at least 6 blocks wide. Terrain is sampled by background
+  workers (`js/grid.js`, `js/lodworker.js`), reusing the part of a ring that is still inside its new position.
+  A ring is hidden once its cells are about two pixels across, so out at planet scale only the globe is left:
+  the whole planet at 256 blocks per cell (the coarsest ring's detail), built in tiles nearest you first from
+  the moment a world starts.
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
@@ -112,8 +117,10 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `js/terrain.js` | Continents, heights, surface blocks, and river carving (`surface`, `column`) |
 | `js/flora.js` | Trees by biome, whole across face edges |
 | `js/world.js` | Chunks, block access across edges, meshing and loading, flat and round placement and the blend shader |
-| `js/globe.js` | The coarse whole-planet mesh shown in the round view |
-| `js/lod.js` | Distant terrain rings and river ribbons around the player |
+| `js/grid.js` | Terrain sampled on grids for distant terrain, handed to background workers |
+| `js/lodworker.js` | The background worker that samples those grids |
+| `js/globe.js` | The whole planet at 256 blocks per cell, in tiles, shown in the round view |
+| `js/lod.js` | Distant terrain rings (morphing into each other) and river ribbons around the player |
 | `js/player.js` | Movement, collision, facing and block picking |
 | `js/villages.js` | Charts, village siting, layout and stamping into chunks, nearest-village search |
 | `js/mobs.js` | Sheep: model, wandering, A* paths across face edges, following |
@@ -126,3 +133,4 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `tools/village-stats.js` | `node tools/village-stats.js [seed]`: how many regions get villages and how many the edge margin excludes |
 | `test/villages.js` | Headless run: visits the nearest village and one by a cube corner, counts their blocks |
 | `test/sheep.js` | Headless run: a flock wanders, then follows the player across a face edge |
+| `test/distant.js` | Headless run: distant terrain from 2,500 blocks up, fast flight, a river from above, planet scale |

@@ -100,6 +100,7 @@ function start() {
   seed = parseInt($("seed").value, 10) || 1;
   world.reset();
   world.init(scene, seed);
+  BF.sampler.reset(seed);
   BF.globe.reset(scene);
   BF.lod.reset(scene);
   map.built = false;
