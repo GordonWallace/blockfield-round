@@ -1,5 +1,6 @@
 // Headless look at lakes: finds the lakes with the most rivers flowing in and views each from above, to see
-// the inflows end at the shore and one outlet leave from the lowest bank. Saves screenshots.
+// the inflows end at the shore and one outlet leave from the lowest bank. Saves screenshots. HIGH=1 picks
+// the biggest lakes at least 20 blocks above sea level instead; LAKES=n sets how many.
 // Usage: node test/lakes.js <url> <outDir> [threeFile]   (threeFile replaces the CDN copy of three.js when offline)
 const { chromium } = require("playwright");
 const fs = require("fs");
@@ -18,16 +19,19 @@ const fs = require("fs");
   const ev = (f, a) => page.evaluate(f, a);
   await page.waitForTimeout(8000);
   // lakes by the number of rivers flowing in
-  const lakes = await ev((count) => {
+  const lakes = await ev(([count, high]) => {
     const RV = BF.world.terrain.rivers(), ins = new Map();
     for (const n of RV.link) if (RV.isLake(RV.down[n])) ins.set(RV.down[n], (ins.get(RV.down[n]) || 0) + 1);
-    return [...ins].sort((a, b) => b[1] - a[1]).slice(0, count).map(([id, k]) => {
+    // the busiest lakes, or (HIGH) the biggest well above sea level
+    const pick = high ? RV.lakes.map((L, k) => [RV.NN + k, L]).filter(([, L]) => L.draw > BF.planet.SEA + 20).sort((a, b) => b[1].cells.length - a[1].cells.length).map(([id]) => [id, ins.get(id) || 0])
+      : [...ins].sort((a, b) => b[1] - a[1]);
+    return pick.slice(0, count).map(([id, k]) => {
       const L = RV.lakes[id - RV.NN];
       let x = 0, y = 0, c = 0;
       for (const n of RV.link) if (RV.down[n] === id && RV.faceOf(n) === L.F) { x += RV.U[n]; y += RV.V[n]; c++; }
-      return { id, inflows: k, F: L.F, u: (L.ox + (c ? x / c : L.ox)) / 2, v: (L.oy + (c ? y / c : L.oy)) / 2, cells: L.cells.length, out: RV.down[id] };
+      return { id, inflows: k, level: L.draw, F: L.F, u: (L.ox + (c ? x / c : L.ox)) / 2, v: (L.oy + (c ? y / c : L.oy)) / 2, cells: L.cells.length, out: RV.down[id] };
     });
-  }, Number(process.env.LAKES || 3));
+  }, [Number(process.env.LAKES || 3), !!process.env.HIGH]);
   for (const L of lakes) {
     for (const h of [1800, 4000]) {
       await ev(([L, h]) => {
@@ -38,7 +42,7 @@ const fs = require("fs");
       await page.waitForTimeout(3000);
       for (let t = 0; t < 57000 && (await ev(() => BF.sampler.pending() + BF.lod.levels.filter((L) => L.building).length)); t += 1000) await page.waitForTimeout(1000);
       await page.waitForTimeout(2000);
-      console.log(`lake ${L.id}: ${L.inflows} rivers in, ${L.cells} cells, outlet to ${L.out}, ${h} up`, errors.slice(0, 3).join(" / "));
+      console.log(`lake ${L.id}: level ${L.level}, ${L.inflows} rivers in, ${L.cells} cells, outlet to ${L.out}, ${h} up`, errors.slice(0, 3).join(" / "));
       await page.screenshot({ path: `${out}/lake-${L.id}-${h}.png` });
     }
   }

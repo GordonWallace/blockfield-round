@@ -31,6 +31,7 @@ const ACC_MIN = 6;                    // rain-weighted catchment (in nodes) at w
 const WCAP = 40;                      // largest half width
 const STEP = 16;                      // spacing of the meander polyline
 const DROP = 1.5;                     // water surface this far below the lower bank
+const SLACK = 3;                     // and this much further below the coarse samples along a river
 const FLAT = 250;                     // blocks before a junction where the water is level with it
 const REACH = 150;                    // how far from the water a river shapes its valley
 const CELL = 512, KC = N / CELL;      // lookup cells per face edge
@@ -162,6 +163,7 @@ BF.makeRivers = function (seed, sample, ground) {
   // small groups of sea nodes inland. A lake is the pocket of LC-block cells below sea level there; pockets
   // that turn out to be part of the ocean (they reach open sea, or grow past CAP cells) are left alone.
   const LC = 128, KL = N / LC, CAP = 4000, FS = 16;   // lake cells; most cells in one lake; fine step
+  const HMIN = 6;   // how deep a highland basin must be (at its deepest node) to hold a lake
   const lakes = [], lakeCell = new Map(), lakeCoarse = new Set(), member = new Uint8Array(NN);
   const isLake = (n) => n >= NN;
   const wl3 = {};
@@ -181,8 +183,8 @@ BF.makeRivers = function (seed, sample, ground) {
     }
     return -1;
   }
-  // the lake that point (x, y) is in (near its cells and below sea level), or -1
-  const inLake = (F, x, y) => { const l = lakeNear(F, x, y); return l >= 0 && groundAt(F, x, y) < SEA ? l : -1; };
+  // the lake that point (x, y) is in (near its cells and below its water level), or -1
+  const inLake = (F, x, y) => { const l = lakeNear(F, x, y); return l >= 0 && groundAt(F, x, y) < lakes[l].wl ? l : -1; };
   // sea nodes in big groups are open ocean
   const comp = new Int32Array(NN).fill(0);
   for (let n = 0; n < NN; n++) {
@@ -192,27 +194,29 @@ BF.makeRivers = function (seed, sample, ground) {
     for (const m of grp) comp[m] = grp.length;
   }
   const OCEAN = 30;   // sea nodes in a group bigger than this are ocean
-  const lakeStats = { calls: 0, cells: 0, ocean: 0, cap: 0 };
+  const lakeStats = { calls: 0, cells: 0, ocean: 0, cap: 0, leak: 0, high: 0, lowered: 0 };
   // The pocket around (x, y) of face F's grid: the LC-block cells below sea level joined to it (and the
   // one it starts in), then the outlet: the lowest point of its banks, found on a FS-block grid around the
   // lowest bank cell, and the way out from there (downhill, or else straight out of the lake). null if the
   // pocket is part of the ocean or bigger than CAP cells.
-  function pocket(F, x, y) {
+  const cellH = new Map();   // ground at lake cells' centres, by cell key
+  function pocket(F, x, y, lvl = SEA, allowed = null) {
     lakeStats.calls++;
     const cx0 = Math.floor(x / LC), cy0 = Math.floor(y / LC), k0 = ckey(F, cx0, cy0);
     if (k0 < 0) return null;
     const seen2 = new Set([k0]), st = [[cx0, cy0, k0]], cells = [], bank = [];
     while (st.length) {
       const [cx, cy, key] = st.pop();
-      const h = groundAt(F, cx * LC + LC / 2, cy * LC + LC / 2);
-      lakeStats.cells++;
-      if (h >= SEA && key !== k0) { bank.push([h, cx, cy]); continue; }
+      let h = cellH.get(key);
+      if (h === undefined) { h = groundAt(F, cx * LC + LC / 2, cy * LC + LC / 2); cellH.set(key, h); lakeStats.cells++; }
+      if (h >= lvl && key !== k0) { bank.push([h, cx, cy]); continue; }
       cells.push(key);
-      if (cells.length > CAP) { lakeStats.cap++; return null; }
+      if (cells.length > (allowed ? 4 * CAP : CAP)) { lakeStats.cap++; return null; }
       // the lattice node over this cell: open ocean?
       const g = (key / (KL * KL)) | 0, cu = ((key / KL) | 0) % KL, cv = key % KL;
       const n = g * MM + Math.min(M - 1, Math.floor(cv * LC / NS)) * M + Math.min(M - 1, Math.floor(cu * LC / NS));
       if (sea[n] && comp[n] > OCEAN) { lakeStats.ocean++; return null; }
+      if (allowed && !allowed.has(n)) { lakeStats.leak++; return null; }   // spills out of its basin
       for (let k = 0; k < 8; k++) {
         const nx = cx + DIRS[k][0], ny = cy + DIRS[k][1], nk = ckey(F, nx, ny);
         if (nk < 0 || seen2.has(nk)) continue;
@@ -221,6 +225,12 @@ BF.makeRivers = function (seed, sample, ground) {
       }
     }
     if (!bank.length) return null;
+    return { F, wl: lvl, cells, bank, dead: false };
+  }
+  // Pocket L's outlet point (the lowest point of its banks, found on a grid around the lowest bank cell) and
+  // the way out from there (downhill, or else straight out of the lake); false if there is none.
+  function outlet(L) {
+    const { F, cells, bank } = L, lvl = L.wl;
     const own = new Set(cells), mine = (px, py) => {
       for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (own.has(ckey(F, Math.floor(px / LC) + dx, Math.floor(py / LC) + dy))) return true;
       return false;
@@ -229,35 +239,36 @@ BF.makeRivers = function (seed, sample, ground) {
     bank.sort((a, b) => a[0] - b[0]);
     let O = null, Oh = Infinity, Ow = null;
     for (const [, bx, by] of bank.slice(0, 1)) {
-      const n2 = (3 * LC) / FS, x0 = (bx - 1) * LC, y0 = (by - 1) * LC, gh = new Float32Array((n2 + 1) * (n2 + 1));
+      const BS = 2 * FS, n2 = (3 * LC) / BS, x0 = (bx - 1) * LC, y0 = (by - 1) * LC, gh = new Float32Array((n2 + 1) * (n2 + 1));
       for (let j = 0; j <= n2; j++) for (let i = 0; i <= n2; i++) {
-        const px = x0 + i * FS, py = y0 + j * FS;
+        const px = x0 + i * BS, py = y0 + j * BS;
         gh[j * (n2 + 1) + i] = ckey(F, Math.floor(px / LC), Math.floor(py / LC)) < 0 ? Infinity : groundAt(F, px, py);
       }
       for (let j = 1; j < n2; j++) for (let i = 1; i < n2; i++) {
         const h = gh[j * (n2 + 1) + i];
-        if (h < SEA || h >= Oh) continue;
+        if (h < lvl || h >= Oh) continue;
         for (let k = 0; k < 4; k++) {
           const ii = i + DIRS[k][0], jj = j + DIRS[k][1];
-          if (gh[jj * (n2 + 1) + ii] < SEA && mine(x0 + ii * FS, y0 + jj * FS)) { O = [x0 + i * FS, y0 + j * FS]; Oh = h; Ow = [x0 + ii * FS, y0 + jj * FS]; break; }
+          if (gh[jj * (n2 + 1) + ii] < lvl && mine(x0 + ii * BS, y0 + jj * BS)) { O = [x0 + i * BS, y0 + j * BS]; Oh = h; Ow = [x0 + ii * BS, y0 + jj * BS]; break; }
         }
       }
     }
-    if (!O) return null;
+    if (!O) return false;
     // the way out: the steepest way down from O over dry ground, else straight out of the water
     let best = 0, dir2 = unit(O[0] - Ow[0], O[1] - Ow[1]);
     for (let k = 0; k < 8; k++) {
       const st2 = 2 * FS / Math.hypot(DIRS[k][0], DIRS[k][1]), px = O[0] + DIRS[k][0] * st2, py = O[1] + DIRS[k][1] * st2;
       if (ckey(F, Math.floor(px / LC), Math.floor(py / LC)) < 0) continue;
       const h = groundAt(F, px, py);
-      if (h < SEA) continue;
+      if (h < lvl) continue;
       const fall = (Oh - h) / (2 * FS);
       if (fall > best) { best = fall; dir2 = unit(DIRS[k][0], DIRS[k][1]); }
     }
-    return { F, wl: SEA, cells, ox: O[0], oy: O[1], dx: O[0] + dir2[0] * LC, dy: O[1] + dir2[1] * LC, dead: false };
+    L.ox = O[0]; L.oy = O[1]; L.dx = O[0] + dir2[0] * LC; L.dy = O[1] + dir2[1] * LC; L.bank = null;
+    return true;
   }
   function addLake(L) {
-    if (lakes.length >= LMAX) return;
+    if (lakes.length >= LMAX || (L.ox === undefined && !outlet(L))) return;
     const k = lakes.length;
     lakes.push(L);
     for (const key of L.cells) {
@@ -288,6 +299,83 @@ BF.makeRivers = function (seed, sample, ground) {
       if (groundAt(F, x, y) >= SEA) continue;
       if (lakeNear(F, x, y) < 0) { const L = pocket(F, x, y); if (L) addLake(L); }
       break;
+    }
+  }
+  // highland lakes: basins in the ground itself (a second priority flood, on ground height from the sea).
+  // Nodes filled to one spill level make one basin; deep enough, it holds a lake whose cells may not spill
+  // past the basin's nodes and the ring around them (a lower gap between nodes would let it drain away), so
+  // the level is lowered until the water stays in
+  {
+    const fg = filled.slice(0, NN).fill(Infinity), seenG = new Uint8Array(NN);
+    for (let n = 0; n < NN; n++) if (sea[n]) { fg[n] = SEA; seenG[n] = 1; push(SEA, n); }
+    while (hn) {
+      const c = pop();
+      for (let k = 0; k < 8; k++) {
+        const m = nb[c * 8 + k];
+        if (m < 0 || seenG[m]) continue;
+        seenG[m] = 1; fg[m] = Math.max(p[m], fg[c]);
+        push(fg[m], m);
+      }
+    }
+    const basins = [], inB = new Uint8Array(NN);
+    for (let n = 0; n < NN; n++) {
+      if (inB[n] || sea[n] || fg[n] - p[n] < 0.01) continue;
+      const st = [n], grp = [n];
+      inB[n] = 1;
+      let deep = n;
+      while (st.length) {
+        const c = st.pop();
+        if (p[c] < p[deep]) deep = c;
+        for (let k = 0; k < 8; k++) {
+          const m = nb[c * 8 + k];
+          if (m >= 0 && !inB[m] && !sea[m] && fg[m] === fg[c] && fg[m] - p[m] >= 0.01) { inB[m] = 1; st.push(m); grp.push(m); }
+        }
+      }
+      if (fg[n] - p[deep] >= HMIN) basins.push({ grp, deep, top: fg[n] });
+    }
+    basins.sort((a, b) => b.grp.length - a.grp.length);
+    // a rough water level for each river (the lowest ground along it so far, from the sources down): a lake
+    // can't stand higher than a river that flows into it
+    const rsE = new Float32Array(NN);
+    for (let n = 0; n < NN; n++) rsE[n] = sea[n] ? SEA : p[n] - DROP - SLACK;
+    for (let r = no - 1; r >= 0; r--) { const n = order[r], m = down[n]; if (!sea[n] && m >= 0) rsE[m] = Math.min(rsE[m], rsE[n]); }
+    // the lowest water level among rivers whose chord reaches pocket L's water (from the nodes in `nodes`)
+    const Bq = [0, 0];
+    function inflowCap(L, nodes, lvl) {
+      const own = new Set(L.cells), wet = (G, x, y) => {
+        const cx = Math.floor(x / LC), cy = Math.floor(y / LC);
+        let hit = false;
+        for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) hit = own.has(ckey(G, cx + dx, cy + dy));
+        return hit && groundAt(G, x, y) < lvl;
+      };
+      let cap = Infinity;
+      for (const n of nodes) {
+        const G = faceOf(n), m = down[n];
+        if (sea[n] || m < 0 || rsE[n] >= lvl || wet(G, U[n], V[n])) continue;
+        if (!inFace(G, m, Bq)) continue;
+        const cnt = Math.max(2, Math.ceil(Math.hypot(Bq[0] - U[n], Bq[1] - V[n]) / 64));
+        for (let s2 = 1; s2 <= cnt; s2++) if (wet(G, U[n] + (Bq[0] - U[n]) * s2 / cnt, V[n] + (Bq[1] - V[n]) * s2 / cnt)) { cap = Math.min(cap, rsE[n] - 1); break; }
+      }
+      return cap;
+    }
+    for (const b of basins) {
+      const F = faceOf(b.deep);
+      if (inLake(F, U[b.deep], V[b.deep]) >= 0) continue;
+      const allowed = new Set(b.grp), gs = new Set(b.grp);
+      for (const c of b.grp) for (let k = 0; k < 8; k++) if (nb[c * 8 + k] >= 0) allowed.add(nb[c * 8 + k]);
+      const ring2 = new Set(allowed);
+      for (const c of allowed) if (!gs.has(c)) for (let k = 0; k < 8; k++) if (nb[c * 8 + k] >= 0) ring2.add(nb[c * 8 + k]);
+      // try the spill level, lower if the water spills out between nodes, and lower again until no river
+      // that reaches the water runs below it
+      let lvl = Math.floor(b.top);
+      for (let t = 0; t < 6; t++) {
+        if (lvl - p[b.deep] < HMIN / 2) break;
+        const L = pocket(F, U[b.deep], V[b.deep], lvl, allowed);
+        if (!L) { lvl = Math.floor(p[b.deep] + (lvl - p[b.deep]) * 0.7); continue; }
+        const cap = inflowCap(L, ring2, lvl);
+        if (cap >= lvl) { addLake(L); lakeStats.high++; break; }
+        lvl = Math.floor(cap);
+      }
     }
   }
   // drop lakes that a later one took in; renumber
@@ -345,12 +433,16 @@ BF.makeRivers = function (seed, sample, ground) {
   const loops = (from, id) => { for (let c = from, k = 0; c >= 0 && !sea[c] && k < NT; c = down[c], k++) if (c === id) return true; return false; };
   const Eq = [0, 0], SD = LC / 4;
   const done = [];   // lakes whose outlets are placed
+  // water from a lake at level wl can't get into a higher lake further down
+  const climbs = (from, wl) => { for (let c = from, k = 0; c >= 0 && k < NT; c = down[c], k++) { if (isLake(c) && lakes[c - NN].wl > wl + 0.5) return true; if (sea[c]) return false; } return false; };
   lakes.forEach((L, k) => {
     const id = NN + k;
+    const goesBack = (c) => loops(c, id) || climbs(c, L.wl);
     let x = L.dx, y = L.dy, h = groundAt(L.F, x, y), hit = -1;
-    if (h < SEA && inLake(L.F, x, y) === k) { x = L.ox; y = L.oy; h = groundAt(L.F, x, y); }   // the way out ran back in
+    if (inLake(L.F, x, y) === k) { x = L.ox; y = L.oy; h = groundAt(L.F, x, y); }   // the way out ran back in
     for (let step = 0; step < 120; step++) {
-      if (h < SEA) { hit = inLake(L.F, x, y); break; }
+      const l2 = h < SEA || lakeNear(L.F, x, y) >= 0 ? inLake(L.F, x, y) : -1;
+      if (h < SEA || (l2 >= 0 && l2 !== k)) { hit = l2; break; }   // the sea, or another lake
       let bx = x, by = y, bh = h;
       for (let q = 0; q < 8; q++) {
         const sl = SD / Math.hypot(DIRS[q][0], DIRS[q][1]), nx = x + DIRS[q][0] * sl, ny = y + DIRS[q][1] * sl;
@@ -410,7 +502,7 @@ BF.makeRivers = function (seed, sample, ground) {
     // a node by the end of the walk that drains elsewhere (looking further if none does)
     for (const far of [1.5 * NS, 3 * NS]) {
       if (down[id] >= 0) break;
-      for (const [d, c] of cand) if (d < far && !loops(c, id) && !crossed(c).length) { down[id] = c; break; }
+      for (const [d, c] of cand) if (d < far && !goesBack(c) && !crossed(c).length) { down[id] = c; break; }
       // or, where everything there drains back into the lake, the outlet takes over the lowest way out of the
       // lake's catchment from there: the nodes along it drain out instead (a best-first search for the path
       // whose highest node is lowest)
@@ -431,7 +523,7 @@ BF.makeRivers = function (seed, sample, ground) {
           open[bi] = open[open.length - 1]; open.pop();
           if (shut.has(c)) continue;
           shut.add(c);
-          if (!loops(c, id)) { exit = c; break; }
+          if (!goesBack(c)) { exit = c; break; }
           for (let q = 0; q < 8; q++) {
             const m = nb[c * 8 + q];
             if (m < 0 || member[m] || shut.has(m)) continue;
@@ -449,13 +541,13 @@ BF.makeRivers = function (seed, sample, ground) {
         break;
       }
     }
-    if (down[id] < 0) for (const [, c] of cand) if (!loops(c, id) && !crossed(c).length) { down[id] = c; break; }
+    if (down[id] < 0) for (const [, c] of cand) if (!goesBack(c) && !crossed(c).length) { down[id] = c; break; }
     if (down[id] < 0) {
       // every way out crosses a stream (on the coarse lattice, one running into the lake beside the outlet):
       // take the way out with fewest crossings, and those streams join the outlet instead
       let best = -1, bn = Infinity, bq = null;
       for (const [, c] of cand) {
-        if (loops(c, id)) continue;
+        if (goesBack(c)) continue;
         const q = crossed(c);
         if (q.length < bn) { bn = q.length; best = c; bq = q; }
       }
@@ -616,25 +708,51 @@ BF.makeRivers = function (seed, sample, ground) {
   // level with the end for the last FLAT blocks, so where rivers join, their water meets at one level.
   // The network pass reads the ground every 64 blocks along each centre line (with SLACK to spare for what
   // lies between); the full profile, every 16 blocks and both banks, is read when a link is first used.
-  const SLACK = 3;
-  const rsN = new Float32Array(NT);
-  for (let n = 0; n < NL; n++) rsN[n] = isLake(n) ? lakes[n - NN].wl : sea[n] ? SEA : Math.max(SEA, p[n] - DROP - SLACK);
+  const rsN = new Float32Array(NT), floor = new Float32Array(NL), fsrc = new Int32Array(NL);
   const low = new Float32Array(NT).fill(Infinity);
   for (let li = 0; li < link.length; li++) {
     const n = link[li], c = curves[li], cnt = c.xs.length - 1;
     for (let k = 2; k < cnt; k += 4) low[n] = Math.min(low[n], groundAt(c.F, c.xs[k], c.ys[k]) - DROP - SLACK);
   }
-  for (let r = ord.length - 1; r >= 0; r--) {
-    const n = ord[r], m = down[n];
-    if (!sea[n] && !sea[m] && !isLake(m)) rsN[m] = Math.max(SEA, Math.min(rsN[m], rsN[n], low[n]));
+  for (const L of lakes) L.draw = L.wl;
+  // Levels with each lake at L.draw. Nothing upstream of a lake runs below its surface; where that would
+  // lift a river more than a block above its own level, the lake is lowered instead (returns true).
+  function levels() {
+    for (let n = 0; n < NL; n++) rsN[n] = isLake(n) ? lakes[n - NN].draw : sea[n] ? SEA : Math.max(SEA, p[n] - DROP - SLACK);
+    for (let r = ord.length - 1; r >= 0; r--) {
+      const n = ord[r], m = down[n];
+      if (!sea[n] && !sea[m] && !isLake(m)) rsN[m] = Math.max(SEA, Math.min(rsN[m], rsN[n], low[n]));
+    }
+    let lowered = false;
+    lakeStats.raised = 0;
+    for (const n of ord) {
+      const m = down[n], below = sea[n] || m < 0 ? SEA : floor[m];   // (a lake with no outlet counts as sea)
+      floor[n] = isLake(n) ? Math.max(rsN[n], below) : below;
+      fsrc[n] = isLake(n) && rsN[n] >= below ? n : sea[n] || m < 0 ? -1 : fsrc[m];
+      if (!isLake(n) && !sea[n] && acc[n] >= ACC_MIN && floor[n] > rsN[n] + 1 && fsrc[n] >= 0) {
+        const L = lakes[fsrc[n] - NN];
+        L.draw = Math.min(L.draw, Math.max(SEA, Math.floor(rsN[n])));
+        lowered = true; lakeStats.raised++;
+      }
+      rsN[n] = Math.max(rsN[n], floor[n]);
+    }
+    return lowered;
   }
-  // nothing upstream of a lake runs below its surface
-  const floor = new Float32Array(NL);
-  for (const n of ord) {
-    const m = down[n];
-    floor[n] = sea[n] || m < 0 ? SEA : isLake(n) ? Math.max(rsN[n], floor[m]) : floor[m];
-    rsN[n] = Math.max(rsN[n], floor[n]);
-  }
+  levels();
+  // Nor is a lake higher than a river that runs through its water without flowing in or out (one whose
+  // course was set before the lake, or that cuts across a corner of it): that river would drain it
+  curves.forEach((c, li) => {
+    const n = link[li], m = down[n];
+    const lvl = Math.min(rsN[n], rsN[m]);
+    for (let k = 0; k < c.xs.length; k++) {
+      const x = c.xs[k], y = c.ys[k];
+      if (x >= 0 && x < N && y >= 0 && y < N && !lakeCoarse.has((c.F * KC + Math.floor(x / CELL)) * KC + Math.floor(y / CELL))) continue;
+      const l = lakeNear(c.F, x, y);
+      if (l < 0 || NN + l === m || NN + l === n || lakes[l].draw <= lvl) continue;
+      if (groundAt(c.F, c.xs[k], c.ys[k]) < lakes[l].draw) { lakes[l].draw = Math.max(SEA, Math.floor(lvl)); lakeStats.lowered++; }
+    }
+  });
+  levels();
   const rs = rsN;
   // links into each node
   const into = new Map();
@@ -660,6 +778,8 @@ BF.makeRivers = function (seed, sample, ground) {
       const k0 = Math.max(0, k - 1), k1 = Math.min(cnt, k + 1), tg = unit(xs[k1] - xs[k0], ys[k1] - ys[k0]);
       const g = Math.min(groundAt(c.F, xs[k], ys[k]), groundAt(c.F, xs[k] - tg[1] * off, ys[k] + tg[0] * off),
         groundAt(c.F, xs[k] + tg[1] * off, ys[k] - tg[0] * off));
+      // a lake's outlet stays at the lake's level until it is out of the lake's water
+      if (isLake(n) && k < cnt && lakeNear(c.F, xs[k], ys[k]) === n - NN && g < rsN[n] + DROP) { r[k] = rsN[n]; continue; }
       run = Math.min(run, g - DROP);
       // the last FLAT blocks before a node sit at the node's level, so rivers that join there run level
       r[k] = Math.max(rsN[m], Math.min(run, rsN[m] + Math.max(0, (1 - k / cnt) * c.L - FLAT) * 0.03));
@@ -736,6 +856,9 @@ BF.makeRivers = function (seed, sample, ground) {
   }
 
   const stats = { lake: lakeStats, nodes: NN, links: link.length, lakes: lakes.length, bent, straightened, ms: Date.now() - t0, nodeMs: tNodes, lakeMs };
-  return { at, lakes, isLake, entry, geom, link, down, main, acc, rs, p, filled, rank, order: ord, sea, U, V, D, nb, curve, view, halfWidth, inFace, faceOf, stats, M, NS, NN };
+  // the water level of the lake whose cells are at or next to column (f, u, v), or -1 (the column itself
+  // holds water only where its ground is below that level)
+  const lakeAt = (f, u, v) => { const l = lakes.length ? lakeNear(f, u, v) : -1; return l >= 0 ? lakes[l].draw : -1; };
+  return { at, lakeAt, lakes, isLake, entry, geom, link, down, main, acc, rs, p, filled, rank, order: ord, sea, U, V, D, nb, curve, view, halfWidth, inFace, faceOf, stats, M, NS, NN };
 };
 })();

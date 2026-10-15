@@ -85,7 +85,7 @@ BF.makeTerrain = function (seed) {
     const r = rivers().at(f, u, v, rv);
     // the nearest river (for distant views, which need to know about rivers narrower than their cells)
     s.rd = r.d; s.rw = r.w; s.rwl = Math.floor(r.rs);
-    if (r.li < 0) return s;
+    if (r.li < 0) return lake(f, u, v, s, h0);
     const w = r.w, wl = Math.floor(r.rs), e = r.d - w;
     let h = h0;
     if (e < 0) {
@@ -106,6 +106,15 @@ BF.makeTerrain = function (seed) {
       if (e < 0) { s.top = B.SAND; s.sub = B.SAND; if (wl > SEA) s.biome = CB.RIVER; }
     }
     if (e < 4) s.river = true;
+    return lake(f, u, v, s, h0);
+  }
+  // Lakes above sea level (see rivers.js): water up to the lake's level wherever the ground (before any
+  // river valley was cut into it) is below it.
+  function lake(f, u, v, s, h0) {
+    const lw = rivers().lakeAt(f, u, v);
+    if (lw <= SEA || h0 >= lw) return s;
+    s.wl = Math.max(s.wl, lw);
+    if (s.top !== B.SAND && s.top !== B.GRAVEL) { s.top = s.h < lw - 6 ? B.GRAVEL : B.SAND; s.sub = s.top; }
     return s;
   }
 

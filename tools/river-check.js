@@ -75,7 +75,10 @@ for (const [src] of sources.slice(0, WALK)) {
       const S = surf(c.F, x, y), wl = S.wl;
       cols++;
       if (wl <= S.h) dry++;
-      if (wl > prev) { rises++; worst = Math.max(worst, wl - prev); }
+      if (wl > prev) {
+        rises++; worst = Math.max(worst, wl - prev);
+        if (process.env.SHOW && rises <= 12) console.log("rise: link from", m, RV.isLake(m) ? "(a lake's outlet)" : "", "face", c.F, "at", Math.round(x), Math.round(y), "water", wl, "after", prev, "lake level here", RV.lakeAt(c.F, x, y), "river rs", Math.round(RV.rs[m]), "->", Math.round(RV.rs[down[m]]));
+      }
       prev = Math.min(prev, wl);
     }
     // cross-sections every 64 blocks along the link (once per link)
@@ -88,7 +91,10 @@ for (const [src] of sources.slice(0, WALK)) {
         sections++;
         for (let o = -reach; o <= reach; o++) {
           const S = surf(c.F, c.xs[k] + nx * o, c.ys[k] + ny * o), cur = { h: S.h, wl: S.wl };
-          if (last && ((last.wl > last.h && cur.wl <= cur.h && cur.h < last.wl) || (cur.wl > cur.h && last.wl <= last.h && last.h < cur.wl))) spills++;
+          if (last && ((last.wl > last.h && cur.wl <= cur.h && cur.h < last.wl) || (cur.wl > cur.h && last.wl <= last.h && last.h < cur.wl))) {
+            spills++;
+            if (process.env.SHOW && spills <= 12) console.log("spill: link from", m, "face", c.F, "at", Math.round(c.xs[k] + nx * o), Math.round(c.ys[k] + ny * o), "water", Math.max(last.wl, cur.wl), "ground", Math.min(last.h, cur.h), "lake level here", RV.lakeAt(c.F, c.xs[k] + nx * o, c.ys[k] + ny * o), "river rs", RV.rs[m], "->", RV.rs[down[m]]);
+          }
           last = cur;
         }
       }

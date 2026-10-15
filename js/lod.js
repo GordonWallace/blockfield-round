@@ -52,7 +52,11 @@ lod.colour = function (h, wl, top, biome, ice, out, o) {
   let r, g, b;
   if (wl > h) {
     if (ice) [r, g, b] = ICE;
-    else if (wl <= P.SEA) { r = 0.18 + (h - 40) / 900; g = 0.3 + (h - 40) / 400; b = 0.72; }
+    else if (wl <= P.SEA || wl - h > 3) {
+      // the sea and lakes, darker with depth (a lake as deep as the sea is at this height)
+      const d = P.SEA - (wl - h);
+      r = 0.18 + (d - 40) / 900; g = 0.3 + (d - 40) / 400; b = 0.72;
+    }
     else [r, g, b] = WATER;
   } else {
     const c = world.topColour(top, biome), t = BF.climate.TREES[biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0);
