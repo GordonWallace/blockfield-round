@@ -22,7 +22,7 @@ BF.makeTerrain = function (seed) {
   const out = { h: 0, hf: 0, land: 0, temp: 0, rain: 0, band: 0, elat: 0, biome: 0, top: 0, sub: 0, ice: false };
 
   // Surface at unit direction (x, y, z). detail = false skips the small-scale noise (planet map).
-  function sample(x, y, z, detail = true) {
+  function sample(x, y, z, detail = true, groundOnly = false) {
     const X = x * R, Y = y * R, Z = z * R;
     const wx = nB.fbm3(X / WP, Y / WP, Z / WP, 3) * WA;
     const wy = nB.fbm3(X / WP + 31.7, Y / WP, Z / WP, 3) * WA;
@@ -43,6 +43,7 @@ BF.makeTerrain = function (seed) {
       h = SEA + 1 + 60 * smooth(0, 0.3, land) + hills + ridge * ridge * ridge * mask * 150;
     }
     out.hf = h;
+    if (groundOnly) return out;
     h = Math.max(4, Math.min(P.H - 8, Math.floor(h)));
     const cl = climate.at(x, y, z, h, land, detail), bi = cl.biome;
     let top, sub;
@@ -72,7 +73,7 @@ BF.makeTerrain = function (seed) {
     const b = sample(x, y, z, true);
     route.hf = b.hf; route.rain = b.rain; route.elat = b.elat;
     return route;
-  }));
+  }, (x, y, z) => sample(x, y, z, true, true).hf));
   const rv = { d: 0, w: 0, rs: 0, li: -1 };
 
   // The surface of column (f, u, v) with rivers carved in: sample() plus wl (top water layer, or -1 for
@@ -82,6 +83,8 @@ BF.makeTerrain = function (seed) {
     const h0 = s.h;
     s.wl = h0 < SEA ? SEA : -1; s.river = false;
     const r = rivers().at(f, u, v, rv);
+    // the nearest river (for distant views, which need to know about rivers narrower than their cells)
+    s.rd = r.d; s.rw = r.w; s.rwl = Math.floor(r.rs);
     if (r.li < 0) return s;
     const w = r.w, wl = Math.floor(r.rs), e = r.d - w;
     let h = h0;
@@ -91,12 +94,11 @@ BF.makeTerrain = function (seed) {
       h = h0 < SEA - 1 ? Math.min(h0, wl - depth) : wl - depth;
       s.wl = Math.max(s.wl, wl);
     } else {
-      // valley sides cut down to the river (fading out at REACH) ...
-      const T = wl + 1 + e * 0.7, fade = smooth(BF.rivers.REACH, BF.rivers.REACH - 50, e);
+      // valley sides cut down to the river where the land stands higher, fading out at REACH (the land is
+      // never built up: the water level is chosen to sit below it)
+      // a broad valley floor near the water, steepening further out
+      const T = wl + 1 + e * 0.15 + e * e * 0.006, fade = smooth(BF.rivers.REACH, BF.rivers.REACH - 50, e);
       if (h > T) h = Math.round(h - (h - T) * fade);
-      // ... and on low ground, banks at least one block above the water, sloping away (a levee)
-      const L = wl + 1 - Math.max(0, e - 3) * 0.5;
-      if (h < L && h0 >= SEA - 1) h = Math.floor(L);
     }
     if (h !== h0) {
       s.h = h;

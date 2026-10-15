@@ -8,10 +8,11 @@ const M = 192, DROP = 30;   // cells per face edge; land sits low, since the coa
 
 const globe = (BF.globe = { group: null, faces: [], next: 0, done: false });
 
+// Colours match the distant-terrain rings (lod.js): block top colours, with forests darkened.
 function colour(s) {
-  if (s.h < P.SEA) return s.ice ? [0.86, 0.92, 0.96] : [0.18 + (s.h - 40) / 900, 0.3 + (s.h - 40) / 400, 0.72];
-  const c = BF.climate.mapColour(s), e = 0.9 + 0.25 * Math.min(1, (s.h - P.SEA) / 250);
-  return [c[0] * e, c[1] * e, c[2] * e];
+  if (s.h < P.SEA) return s.ice ? [0.66, 0.78, 0.94] : [0.18 + (s.h - 40) / 900, 0.3 + (s.h - 40) / 400, 0.72];
+  const c = world.topColour(s.top, s.biome), t = BF.climate.TREES[s.biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0);
+  return [c[0] * k, c[1] * k, c[2] * k];
 }
 
 // One face, built row by row: { anchor, rows, pos, col }.
@@ -84,7 +85,7 @@ globe.update = function (k, budgetMs = 8) {
     // The coarse mesh can sit above real terrain (it skips small hills), so it leaves a hole under the
     // loaded chunks. The hole is smaller than the loaded area because, near a face edge, the chunks chosen
     // in the flat grid cover a sheared patch of the true sphere.
-    u.hole.value = world.viewDist * 16 * 0.65;
+    u.hole.value = Math.max(world.viewDist * 16 * 0.65, BF.lod ? BF.lod.radius() * 0.97 : 0);
   }
 };
 })();

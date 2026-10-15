@@ -73,22 +73,26 @@ uniform float fogFar;
 uniform float opacity;
 uniform vec3 tint;
 uniform float hole;
+uniform float outer;
 varying vec3 vColor;
 varying float vDist;
 varying vec2 vXZ;
 void main() {
-  if (length(vXZ) < hole) discard;   // the planet mesh leaves a hole where real chunks are loaded
+  // distant terrain leaves a hole where finer terrain is drawn, and the finer rings stop at their edge
+  if (length(vXZ) < hole || (outer > 0.0 && length(vXZ) > outer)) discard;
   gl_FragColor = vec4(mix(vColor * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
 }`;
 function material(water) {
   const m = new THREE.ShaderMaterial({
     vertexShader: VERT, fragmentShader: FRAG,
-    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: 0 } },
+    uniforms: { ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 }, tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: 0 }, outer: { value: 0 } },
     transparent: water, depthWrite: !water,
   });
   return m;
 }
 world.material = material;
+// Top colour of block b in biome bi (grass takes the biome's colour).
+world.topColour = (b, bi) => b === B.GRASS ? GRASS[bi] : COLF[b][0];
 world.shared = shared;
 
 world.init = function (scene, seed) {
@@ -345,6 +349,9 @@ world.update = function (budgetMs = 6) {
     for (const [k, c] of world.chunks) if (!keep.has(k) && !c.edited) world.chunks.delete(k);
   }
   for (const g of world.meshes.values()) place(g);
+  // how far out every wanted chunk has a mesh (distant terrain fills in beyond that while chunks load)
+  const gap = list.find((e) => !world.meshes.has(e.k));
+  world.covered = gap ? Math.max(0, Math.sqrt(gap.d2) - 1) * CS : world.viewDist * CS;
   return { wanted: list.length, meshed: world.meshes.size };
 };
 
@@ -384,6 +391,7 @@ world.reset = function () {
 };
 
 world.solid = solid;
+world.place = place;
 
 // Does a box of half-width hw and height ht with its feet centred at (u, v, y) on face f touch a solid block?
 world.boxHits = function (f, u, v, y, hw, ht) {

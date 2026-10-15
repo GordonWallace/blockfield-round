@@ -40,13 +40,20 @@ Run it with `./run.sh` and open http://localhost:8000.
   subtropics; plains, meadow, forest, flower forest, birch and dark forest in the temperate band; taiga, old
   taiga, snowy taiga and snowy plains in the subarctic; and snowy plains, snowy taiga and ice sheet in the
   arctic. Biome ids and names are Blockfield's. Trees (`js/flora.js`) follow the biome.
-- **Rivers** (`js/rivers.js`). The whole planet's drainage is solved when a world starts (under a second):
+- **Rivers** (`js/rivers.js`). The whole planet's drainage is solved when a world starts (under two seconds):
   a node about every kilometre, a priority flood from the sea so every node has a way down, steepest descent
-  so water gathers into trunk rivers, flow summed from the sources so tributaries join into wider rivers,
-  and a water surface set from the sea upward so it never rises downstream. The blocks are carved from
-  that: channel, banks one block above the water, valley sides cut back where hills stand in the way, and a
-  levee where a river crosses low ground. Rivers freeze over in the arctic band. `node tools/river-check.js`
+  so water gathers into trunk rivers, and flow summed from the sources so tributaries join into wider rivers.
+  Each river is a smooth curve through its nodes (it bends gradually where links meet, never at a corner),
+  with meanders on top. The water fits the land: it sits a block or two below the lowest ground at the centre
+  and both banks, worked from the sources down so it never rises; where the land ahead rises, the river keeps
+  its level and cuts a valley through. Nothing is ever built up to carry a river. Rivers that join meet at one
+  level, and rivers freeze over in the arctic band. `node tools/river-check.js`
   proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
+- **Distant terrain** (`js/lod.js`). Beyond the loaded chunks, rings of height-field meshes show the land at
+  4, 16, 64 and 256 blocks per cell, out to 33 km, with the same colours as the blocks (forests darkened, since
+  trees aren't drawn there). Rivers are drawn out there as ribbons along their curves, at least 6 blocks wide,
+  so the whole network shows from high up. The rings appear once you are 40 blocks above the ground, build a
+  few rows per frame, and rebuild around you as you travel; the coarse globe covers the rest of the planet.
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
@@ -106,6 +113,7 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `js/flora.js` | Trees by biome, whole across face edges |
 | `js/world.js` | Chunks, block access across edges, meshing and loading, flat and round placement and the blend shader |
 | `js/globe.js` | The coarse whole-planet mesh shown in the round view |
+| `js/lod.js` | Distant terrain rings and river ribbons around the player |
 | `js/player.js` | Movement, collision, facing and block picking |
 | `js/villages.js` | Charts, village siting, layout and stamping into chunks, nearest-village search |
 | `js/mobs.js` | Sheep: model, wandering, A* paths across face edges, following |

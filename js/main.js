@@ -49,7 +49,8 @@ function setupView() {
   const l = Math.hypot(x[0], x[1], x[2]); x = [x[0] / l, x[1] / l, x[2] / l];
   const z = [x[1] * up[2] - x[2] * up[1], x[2] * up[0] - x[0] * up[2], x[0] * up[1] - x[1] * up[0]];
   V.M = [x[0], x[1], x[2], up[0], up[1], up[2], z[0], z[1], z[2]];
-  const r = world.viewDist * 16, k = V.k, sh = world.shared;
+  // drawn terrain reaches the loaded chunks, or the distant rings once they are built
+  const r = Math.max(world.viewDist * 16, BF.lod.radius()), k = V.k, sh = world.shared;
   sh.k.value = k;
   // Fog hides the edge of the loaded chunks. It is pushed out by the height above the ground, so the
   // ground below stays visible when flying; once the globe shows it moves out to the horizon and,
@@ -100,6 +101,7 @@ function start() {
   world.reset();
   world.init(scene, seed);
   BF.globe.reset(scene);
+  BF.lod.reset(scene);
   map.built = false;
   spawn();
   mobs.clear();
@@ -300,11 +302,10 @@ function buildMap() {
   // rivers: every link's meandering centre line, a little above the ground
   const RV = T.rivers(), rp = [], rc = [], q = [0, 0, 0];
   for (let li = 0; li < RV.link.length; li++) {
-    const cv = RV.curve(li), big = Math.min(1, cv.w / BF.rivers.WCAP);
+    const cv = RV.geom(li), big = Math.min(1, cv.w / BF.rivers.WCAP), r = 1 + Math.max(0, RV.rs[RV.link[li]] - P.SEA) / P.R * 3 + 0.0012;
     for (let k = 0; k < cv.xs.length - 1; k += 4) {
       for (const j of [k, Math.min(cv.xs.length - 1, k + 4)]) {
         P.dir(cv.F, cv.xs[j], cv.ys[j], q);
-        const r = 1 + Math.max(0, cv.r[j] - P.SEA) / P.R * 3 + 0.0012;
         rp.push(q[0] * r, q[1] * r, q[2] * r); rc.push(0.25 - 0.15 * big, 0.5 - 0.15 * big, 1);
       }
     }
@@ -365,6 +366,7 @@ function frame(now) {
   setupView();
   mobs.update(dt, player);
   const st = world.update();
+  BF.lod.update(player.altitude());
   BF.globe.update(world.view.k);
   // facing in render space (in the round view near a corner, grid directions are skewed)
   const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch), p = player;

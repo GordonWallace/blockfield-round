@@ -56,7 +56,7 @@ const dot = (x, y, c, a) => {
 const blocksPerPx = (zoom ? zoom.span * DEG : 2 * Math.PI) * P.R / W;
 let longest = 0, mouths = 0;
 for (let li = 0; li < RV.link.length; li++) {
-  const c = RV.curve(li), n = RV.link[li];
+  const c = RV.geom(li), n = RV.link[li];
   if (RV.sea[RV.down[n]]) mouths++;
   const px = Math.max(0.8 + 2.6 * c.w / BF.rivers.WCAP, 2 * c.w / blocksPerPx), col = [40, 90, 230];
   for (let k = 0; k < c.xs.length; k += zoom ? 1 : 4) {
