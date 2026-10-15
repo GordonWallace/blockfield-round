@@ -18,22 +18,29 @@ const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] 
 
 const collides = (u, v, y) => world.boxHits(p.f, u, v, y, HW, HT);
 
-// Moves along one grid axis; walking into a one-block ledge steps up onto it.
+// Moves along one grid axis at a time; walking into a one-block ledge steps up onto it. Crossing onto
+// another face mid-move turns the rest of the move with the facing.
 function moveH(du, dv) {
   const steps = Math.min(400, Math.ceil(Math.max(Math.abs(du), Math.abs(dv)) / 0.25) || 1);
+  let su = du / steps, sv = dv / steps;
   for (let s = 0; s < steps; s++) {
-    for (const [a, b] of [[du / steps, 0], [0, dv / steps]]) {
+    for (let axis = 0; axis < 2; axis++) {
+      const a = axis ? 0 : su, b = axis ? sv : 0;
       if (!a && !b) continue;
       if (!collides(p.u + a, p.v + b, p.y)) { p.u += a; p.v += b; }
       else if ((p.onGround || p.flying) && !collides(p.u + a, p.v + b, Math.floor(p.y) + 1) && !collides(p.u, p.v, Math.floor(p.y) + 1)) {
         p.y = Math.floor(p.y) + 1; p.u += a; p.v += b;
       }
-      if (p.u < 0 || p.u >= P.N || p.v < 0 || p.v >= P.N) cross();
+      if (p.u < 0 || p.u >= P.N || p.v < 0 || p.v >= P.N) {
+        const A = cross();
+        if (A) { const nu = A[0] * su + A[2] * sv, nv = A[1] * su + A[3] * sv; su = nu; sv = nv; }
+      }
     }
   }
 }
 
-// Ran off the face: move onto the neighbouring face and turn the facing with the unfold.
+// Ran off the face: move onto the neighbouring face and turn the facing with the unfold. Returns the
+// unfold's matrix (grid directions turn by its transpose), or null.
 function cross() {
   const f0 = p.f, g = P.wrap(p.f, p.u, p.v, {});
   p.f = g.f; p.u = g.u; p.v = g.v;
@@ -42,7 +49,10 @@ function cross() {
     // e maps the new face's grid into the old one's; facing goes the other way (transpose)
     const A = e.A, hu = A[0] * p.hu + A[2] * p.hv, hv = A[1] * p.hu + A[3] * p.hv;
     p.hu = hu; p.hv = hv;
-  } else setHeading(p.heading);
+    return A;
+  }
+  setHeading(p.heading);
+  return null;
 }
 
 // Facing from a 3D tangent vector (for P.toward and friends).
@@ -81,6 +91,10 @@ p.update = function (dt) {
   // fast flight speeds up with height, so a few seconds of Space reach orbit
   if (p.flying && p.fast) speed *= Math.max(1, p.altitude() / 150);
   const before = P.pos(p.f, p.u, p.v, P.SEA, [0, 0, 0]);
+  // In the round view the facing is kept as a direction on the sphere, so flight follows great circles and
+  // turns nowhere at a face edge (where grid lines bend). In the flat view it stays a grid direction, so
+  // walking is straight in the drawn world.
+  const round = world.view && world.view.k > 0.5, h3 = round ? p.heading.slice() : null;
   let du = p.hu * fw + p.hv * st, dv = p.hv * fw - p.hu * st;
   const l = Math.hypot(du, dv);
   if (l > 0) moveH(du / l * speed * dt, dv / l * speed * dt);
@@ -99,6 +113,7 @@ p.update = function (dt) {
   const after = P.pos(p.f, p.u, p.v, P.SEA, [0, 0, 0]);
   p.travelled += Math.hypot(after[0] - before[0], after[1] - before[1], after[2] - before[2]);
   derive();
+  if (round) { setHeading(h3); derive(); }
   p.target = raycast();
 };
 
