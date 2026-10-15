@@ -30,6 +30,7 @@ function resize() {
   map.camera.aspect = camera.aspect; map.camera.updateProjectionMatrix();
 }
 
+const VIEW_MAX = 24;   // chunks; also the starting view distance
 function setView(v) { world.viewDist = v; }
 
 // Fills world.view for this frame: blend k from height, the rotation that lines the sphere up with the
@@ -145,8 +146,9 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyC") cornerRound = !cornerRound;
   if (e.code === "KeyR") forceK = forceK === 1 ? null : 1;   // true sphere everywhere, for comparison
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 500; i++) { const d = [n.hash(i, 1) * 2 - 1, n.hash(i, 2) * 2 - 1, n.hash(i, 3) * 2 - 1]; if (landAt(d)) { goTo(d); break; } } }
-  if (e.code === "Equal" || e.code === "NumpadAdd") setView(Math.min(24, world.viewDist + 2));
-  if (e.code === "Minus" || e.code === "NumpadSubtract") setView(Math.max(4, world.viewDist - 2));
+  // + and - change the view distance, never the browser's zoom (which would also scale the text overlay)
+  if (e.code === "Equal" || e.code === "NumpadAdd") { e.preventDefault(); setView(Math.min(VIEW_MAX, world.viewDist + 2)); }
+  if (e.code === "Minus" || e.code === "NumpadSubtract") { e.preventDefault(); setView(Math.max(4, world.viewDist - 2)); }
   if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
 });
 addEventListener("keyup", (e) => { player.keys[e.code] = false; });
@@ -416,7 +418,7 @@ $("play").addEventListener("click", start);
 $("seed").addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
 addEventListener("resize", resize);
 resize();
-setView(8);
+setView(VIEW_MAX);
 requestAnimationFrame(frame);
 BF.main = { start, goTo, goGrid, goCorner, teleport, setView, map, renderer, camera, scene, CORNERS, cornerGrid, ALT0, ALT1,
   forceBlend: (k) => { forceK = k; }, cornerMode: (round) => { cornerRound = round; } };

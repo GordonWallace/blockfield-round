@@ -106,7 +106,7 @@ to travel. P opens the teleport panel (also /): type `face 0 81920 81920 [layer]
 and longitude, N/S/E/W allowed), `corner 1`-`corner 8` or `up 5000`, or press a corner or height button.
 B tints each cube face, C switches corners between the round view and an empty wedge, and R draws the
 true sphere everywhere, to compare (for example, rows of blocks bending where they cross a face edge). T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
-wheat, and + / - change the view distance. Left click breaks a block and right click places planks.
+wheat, and + / - change the view distance (it starts at the largest, 24 chunks). Left click breaks a block and right click places planks.
 
 ## Files
 

@@ -38,7 +38,7 @@ const GRASS = BF.climate.GRASS;
 const opaque = (b) => solid(b) && b !== B.ICE;
 
 const world = (BF.world = {
-  chunks: new Map(), meshes: new Map(), viewDist: 8, terrain: null, scene: null,
+  chunks: new Map(), meshes: new Map(), viewDist: 24, terrain: null, scene: null,
   matSolid: null, matWater: null, genCount: 0, meshCount: 0,
 });
 const key = (f, cx, cz) => f * NC * NC + cx * NC + cz;
