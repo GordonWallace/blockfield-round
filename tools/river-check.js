@@ -1,5 +1,5 @@
 // Checks a seed's rivers, on the network and on the generated blocks.
-// Usage: node tools/river-check.js [seed] [rivers to walk, default 300]
+// Usage: node tools/river-check.js [seed] [rivers to walk, default 300]   (SHOW=1 lists any crossings)
 //
 // Network (every node): each land node reaches the sea without loops; the water surface never rises
 // from a node to the one it drains into; no two river links cross.
@@ -13,7 +13,7 @@ global.window = global;
 for (const f of ["noise", "planet", "climate", "rivers", "terrain"]) require(path.join(__dirname, "..", "js", f + ".js"));
 const seed = +(process.argv[2] || 1), WALK = +(process.argv[3] || 300);
 const P = BF.planet, T = BF.makeTerrain(seed), RV = T.rivers();
-const { link, down, sea, rs, U, V } = RV, NN = sea.length;
+const { link, down, sea, rs, U, V } = RV, NN = RV.NN + RV.lakes.length;   // lattice nodes, then lakes
 const t0 = Date.now();
 
 // ---- network ----
@@ -21,38 +21,40 @@ let loops = 0, uphill = 0, maxSteps = 0;
 for (let n = 0; n < NN; n++) {
   if (sea[n]) continue;
   let m = n, k = 0;
-  while (!sea[m] && k <= NN) { if (rs[down[m]] > rs[m] + 1e-4) uphill++; m = down[m]; k++; }
+  while (m >= 0 && !sea[m] && down[m] >= 0 && k <= NN) { if (rs[down[m]] > rs[m] + 1e-4) uphill++; m = down[m]; k++; }
   if (k > NN) loops++;
   maxSteps = Math.max(maxSteps, k);
 }
-// crossings: chords of links on the same face (moved into one grid), sharing no node
+// crossings: chords of links on the same face (moved into one grid), sharing no node; a river into a lake
+// ends at the shore, so its chord does too
 const A = [0, 0], B = [0, 0], C = [0, 0], D = [0, 0];
 const cross = (a, b, c, d) => {
   const o = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
   return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
 };
+const end = (f, n, out) => { const en = RV.entry.get(n); if (en) { out[0] = en[0]; out[1] = en[1]; return out; } return RV.inFace(f, down[n], out); };
 let crossings = 0;
 const byCell = new Map();
 for (const n of link) { const f = RV.faceOf(n), k = f * 1e6 + Math.floor(U[n] / 4096) * 1000 + Math.floor(V[n] / 4096); (byCell.get(k) || byCell.set(k, []).get(k)).push(n); }
 for (const n of link) {
   const f = RV.faceOf(n);
-  RV.inFace(f, n, A); RV.inFace(f, down[n], B);
+  RV.inFace(f, n, A); end(f, n, B);
   for (let du = -1; du <= 1; du++) for (let dv = -1; dv <= 1; dv++) {
     const a = byCell.get(f * 1e6 + (Math.floor(U[n] / 4096) + du) * 1000 + Math.floor(V[n] / 4096) + dv);
     if (a) for (const m of a) {
-      if (m <= n || m === down[n] || down[m] === n || down[m] === down[n]) continue;
-      RV.inFace(f, m, C); RV.inFace(f, down[m], D);
-      if (cross(A, B, C, D)) crossings++;
+      if (m <= n || m === down[n] || down[m] === n || (down[m] === down[n] && !RV.isLake(down[n]))) continue;   // into one lake: at different places
+      RV.inFace(f, m, C); end(f, m, D);
+      if (cross(A, B, C, D)) { crossings++; if (process.env.SHOW) console.log("crossing: links from", n, "and", m, "on face", f, "near", A.map(Math.round)); }
     }
   }
 }
-console.log(`seed ${seed}: ${link.length} river links; network: ${loops} loops, ${uphill} uphill steps, ${crossings} crossings; longest path to sea ${maxSteps} nodes`);
+console.log(`seed ${seed}: ${link.length} river links, ${RV.lakes.length} lakes (${RV.stats.lakeMs} ms); network: ${loops} loops, ${uphill} uphill steps, ${crossings} crossings; longest path to sea ${maxSteps} nodes`);
 
 // ---- blocks ----
 // sources = river nodes nothing flows into; walk the ones with the longest way to the sea
 const fed = new Uint8Array(NN), isRiver = new Uint8Array(NN), li = new Int32Array(NN).fill(-1);
-link.forEach((n, i) => { isRiver[n] = 1; li[n] = i; fed[down[n]] = 1; });
-const sources = link.filter((n) => !fed[n]).map((n) => { let k = 0, m = n; while (isRiver[m]) { m = down[m]; k++; } return [n, k]; });
+link.forEach((n, i) => { isRiver[n] = 1; li[n] = i; if (down[n] >= 0) fed[down[n]] = 1; });
+const sources = link.filter((n) => !fed[n]).map((n) => { let k = 0, m = n; while (m >= 0 && isRiver[m]) { m = down[m]; k++; } return [n, k]; });
 sources.sort((a, b) => b[1] - a[1]);
 const w = {}, d = [0, 0, 0];
 function surf(F, x, y) {
@@ -66,7 +68,7 @@ const seen = new Uint8Array(NN);
 for (const [src] of sources.slice(0, WALK)) {
   let prev = Infinity, m = src;
   walked++;
-  while (isRiver[m]) {
+  while (m >= 0 && isRiver[m]) {
     const c = RV.curve(li[m]);
     for (let k = 0; k < c.xs.length - 1; k++) for (let s = 0; s < 4; s++) {
       const t = s / 4, x = c.xs[k] + (c.xs[k + 1] - c.xs[k]) * t, y = c.ys[k] + (c.ys[k + 1] - c.ys[k]) * t;

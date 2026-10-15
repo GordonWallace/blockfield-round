@@ -47,7 +47,9 @@ Run it with `./run.sh` and open http://localhost:8000.
   with meanders on top. The water fits the land: it sits a block or two below the lowest ground at the centre
   and both banks, worked from the sources down so it never rises; where the land ahead rises, the river keeps
   its level and cuts a valley through. Nothing is ever built up to carry a river. Rivers that join meet at one
-  level, and rivers freeze over in the arctic band. `node tools/river-check.js`
+  level, and rivers freeze over in the arctic band. Lakes are inland hollows below sea level: rivers that
+  reach one end at its shore, and one outlet leaves from the lowest point of its banks, as wide as all of its
+  inflows together, along the lowest way out of the lake's valley. `node tools/river-check.js`
   proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
 - **Distant terrain** (`js/lod.js`, `js/globe.js`). Beyond the loaded chunks, seven rings of height-field
   meshes show the land at 4, 8, 16 and on up to 256 blocks per cell, out to 33 km, with the same colours as the
@@ -134,3 +136,4 @@ wheat, and + / - change the view distance. Left click breaks a block and right c
 | `test/villages.js` | Headless run: visits the nearest village and one by a cube corner, counts their blocks |
 | `test/sheep.js` | Headless run: a flock wanders, then follows the player across a face edge |
 | `test/distant.js` | Headless run: distant terrain from 2,500 blocks up, fast flight, a river from above, planet scale |
+| `test/lakes.js` | Headless run: the lakes with the most rivers flowing in, from 1,800 and 4,000 blocks up |
