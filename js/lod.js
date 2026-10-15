@@ -10,6 +10,11 @@
 // the old ring is still inside the new one, and rebuilt once the player has moved a fifth of a ring away.
 // A ring is hidden once its cells are smaller than a pixel or so, which, out at planet scale, leaves the
 // globe alone, with even detail.
+//
+// Trees and village houses: the four finest rings carry stand-ins (a point each, sampled in the workers from
+// the same random numbers as the real trees), drawn at their true size while that is a pixel or more. Below
+// a pixel they thin out and the ground takes the canopy's average colour instead (world.js, CANOPY), which
+// every ring and the globe use, so a forest keeps its colour at every distance and height.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
@@ -22,6 +27,8 @@ const MOVE = 0.2;              // a ring is rebuilt once the player is this frac
 const HOLE = 0.97, MORPH0 = 0.6, MORPH1 = 0.95;   // fractions of a ring's radius
 const RIBBON_HIDE = 9000;      // rivers drawn as ribbons are hidden above this (narrower than a pixel)
 const WATER = [0.27, 0.43, 0.8], ICE = [0.66, 0.78, 0.94];
+const STAND_LEVELS = 4;        // rings with tree and house stand-ins (cells of 4 to 32 blocks)
+const STAND_W = 9;             // the widest stand-in, in blocks (for hiding them all once smaller than half a pixel)
 
 const lod = (BF.lod = { group: null, levels: [], active: false, top: null, eyeHole: 0 });
 
@@ -46,8 +53,8 @@ lod.radius = function () {
 };
 
 // ---- colours and shading (the globe uses these too, so the two match) ----
-// Colour of a sampled column: water by depth (ocean) or river blue, ice, or the top block in its biome,
-// darkened where trees grow (trees aren't drawn this far out).
+// Colour of a sampled column: water by depth (ocean) or river blue, ice, or the top block in its biome
+// (bare: trees come from lod.canopy).
 lod.colour = function (h, wl, top, biome, ice, out, o) {
   let r, g, b;
   if (wl > h) {
@@ -59,10 +66,19 @@ lod.colour = function (h, wl, top, biome, ice, out, o) {
     }
     else [r, g, b] = WATER;
   } else {
-    const c = world.topColour(top, biome), t = BF.climate.TREES[biome], k = 1 - 0.4 * Math.min(1, t ? t.d : 0);
-    r = c[0] * k; g = c[1] * k; b = c[2] * k;
+    const c = world.topColour(top, biome);
+    r = c[0]; g = c[1]; b = c[2];
   }
   out[o] = r; out[o + 1] = g; out[o + 2] = b;
+};
+// The canopy over a sampled column, as (r, g, b, cover) at out[o..o+3]: its biome's average crown colour and
+// the share of ground covered, wherever trees can grow there (as flora.js decides, on the sample's ground).
+const B = BF.B;
+lod.canopy = function (h, wl, top, biome, out, o) {
+  const t = BF.climate.TREES[biome], c = BF.climate.CANOPY[biome];
+  let ok = t && t.d > 0 && wl <= h && h > P.SEA;
+  if (ok) ok = t.kinds[0] === "cactus" ? top === B.SAND || top === B.RED_SAND : top === B.GRASS || top === B.SNOW;
+  out[o] = c ? c[0] : 0; out[o + 1] = c ? c[1] : 0; out[o + 2] = c ? c[2] : 0; out[o + 3] = ok ? c[3] : 0;
 };
 // The drawn height of each sample: the water surface, or the top of the ground.
 lod.heights = function (raw) {
@@ -100,7 +116,8 @@ const FIELDS = ["h", "wl", "top", "biome", "ice", "ok"];
 // asks the workers for the rest.
 function start(L, f, cu, cv) {
   const c = L.cell, n = 2 * EXT + 1, gu0 = cu - EXT * c, gv0 = cv - EXT * c;
-  const b = { f, cu, cv, gu0, gv0, n, pending: 0, t0: performance.now(), raw: BF.gridJob.alloc({ nx: n, ny: n }) };
+  const anchor = P.pos(f, cu, cv, P.SEA, [0, 0, 0]), stand = CELLS.indexOf(c) < STAND_LEVELS ? { cu, cv, anchor, gu0, gv0 } : null;
+  const b = { f, cu, cv, gu0, gv0, n, anchor, pending: 0, t0: performance.now(), raw: BF.gridJob.alloc({ nx: n, ny: n }), parts: [] };
   let rects = [[0, n, 0, n]];   // [j0, j1, i0, i1] still to sample
   const old = L.raw && L.f === f ? L : null;
   if (old) {
@@ -112,6 +129,8 @@ function start(L, f, cu, cv) {
         for (const k of FIELDS) b.raw[k].set(old.raw[k].subarray(s + i0, s + i1), d + i0);
         b.raw.dir.set(old.raw.dir.subarray(3 * (s + i0), 3 * (s + i1)), 3 * (d + i0));
       }
+      // the old ring's stand-ins on the samples kept
+      if (stand) b.parts.push(keep(old, b, i0, i1, j0, j1, di, dj));
       rects = [];
       if (j0 > 0) rects.push([0, j0, 0, n]);
       if (j1 < n) rects.push([j1, n, 0, n]);
@@ -124,7 +143,7 @@ function start(L, f, cu, cv) {
   for (const [j0, j1, i0, i1] of rects) {
     const w = i1 - i0, step = Math.max(1, Math.floor(6000 / w));
     for (let j = j0; j < j1; j += step) {
-      const job = { f, u0: gu0 + i0 * c, v0: gv0 + j * c, cell: c, nx: w, ny: Math.min(step, j1 - j), clamp: false };
+      const job = { f, u0: gu0 + i0 * c, v0: gv0 + j * c, cell: c, nx: w, ny: Math.min(step, j1 - j), clamp: false, stand };
       b.pending++;
       BF.sampler.request(job, prio, (res) => {
         if (L.building !== b) return;
@@ -133,6 +152,7 @@ function start(L, f, cu, cv) {
           for (const k of FIELDS) b.raw[k].set(res[k].subarray(s, s + w), d);
           b.raw.dir.set(res.dir.subarray(3 * s, 3 * (s + w)), 3 * d);
         }
+        if (res.stand) b.parts.push(res.stand);
         if (--b.pending === 0) finish(L, b);
       }, L);
     }
@@ -140,12 +160,63 @@ function start(L, f, cu, cv) {
   if (!b.pending) finish(L, b);
 }
 
+// The stand-ins of old ring L on the samples that new ring b keeps (columns i0 to i1 and rows j0 to j1 of b,
+// which are di and dj further on in L), moved to b's centre and anchor (see BF.gridJob.stand for the form).
+const SK = { flat: 3, sph: 3, col: 3, ws: 2, bin: 2 };
+const SA = { flat: Float32Array, sph: Float32Array, col: Uint8Array, ws: Uint8Array, bin: Uint16Array };
+function keep(L, b, i0, i1, j0, j1, di, dj) {
+  const pts = L.mesh && L.mesh.children[1], n = pts ? L.bin.length / 2 : 0, idx = [];
+  for (let q = 0; q < n; q++) {
+    const i = L.bin[2 * q] - di, j = L.bin[2 * q + 1] - dj;
+    if (i >= i0 && i < i1 && j >= j0 && j < j1) idx.push(q);
+  }
+  const out = {};
+  for (const k in SK) out[k] = new SA[k](idx.length * SK[k]);
+  if (!idx.length) return out;
+  const A = pts.geometry.attributes, fl = A.position.array, sp = A.sphere.array, cl = A.color.array, ws = A.ws.array;
+  const du = L.cu - b.cu, dv = L.cv - b.cv, an = L.mesh.userData.anchor;
+  const ax = an[0] - b.anchor[0], ay = an[1] - b.anchor[1], az = an[2] - b.anchor[2];
+  for (let p = 0; p < idx.length; p++) {
+    const q = idx[p];
+    out.flat[3 * p] = fl[3 * q] + du; out.flat[3 * p + 1] = fl[3 * q + 1]; out.flat[3 * p + 2] = fl[3 * q + 2] + dv;
+    out.sph[3 * p] = sp[3 * q] + ax; out.sph[3 * p + 1] = sp[3 * q + 1] + ay; out.sph[3 * p + 2] = sp[3 * q + 2] + az;
+    out.col[3 * p] = cl[3 * q]; out.col[3 * p + 1] = cl[3 * q + 1]; out.col[3 * p + 2] = cl[3 * q + 2];
+    out.ws[2 * p] = ws[2 * q]; out.ws[2 * p + 1] = ws[2 * q + 1];
+    out.bin[2 * p] = L.bin[2 * q] - di; out.bin[2 * p + 1] = L.bin[2 * q + 1] - dj;
+  }
+  return out;
+}
+function join(parts) {
+  const out = {};
+  for (const k in SK) {
+    let len = 0;
+    for (const p of parts) len += p[k].length;
+    const a = new SA[k](len);
+    let o = 0;
+    for (const p of parts) { a.set(p[k], o); o += p[k].length; }
+    out[k] = a;
+  }
+  return out;
+}
+// The stand-ins as points, laid out like the ring's mesh.
+function points(S) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(S.flat, 3));
+  g.setAttribute("sphere", new THREE.BufferAttribute(S.sph, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(S.col, 3, true));
+  g.setAttribute("ws", new THREE.BufferAttribute(S.ws, 2));
+  const pts = new THREE.Points(g, world.material(false, "points"));
+  pts.frustumCulled = false;
+  return pts;
+}
+
 // Builds ring L's mesh from its samples.
 function finish(L, b) {
+  const tf = performance.now();
   const n = b.n, c = L.cell, raw = b.raw, NV = n * n, y = lod.heights(raw);
-  const anchor = P.pos(b.f, b.cu, b.cv, P.SEA, [0, 0, 0]);
+  const anchor = b.anchor;
   const flat = new Float32Array(NV * 3), sph = new Float32Array(NV * 3), base = new Float32Array(NV * 3), col = new Float32Array(NV * 3);
-  const mflat = new Float32Array(NV * 3), msph = new Float32Array(NV * 3), mcol = new Float32Array(NV * 3);
+  const mflat = new Float32Array(NV * 3), msph = new Float32Array(NV * 3), mcol = new Float32Array(NV * 3), can = new Float32Array(NV * 4);
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     const o = j * n + i;
     if (!raw.ok[o]) continue;
@@ -155,6 +226,8 @@ function finish(L, b) {
     lod.colour(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], raw.ice[o], base, o * 3);
     const sh = lod.shade(raw, y, n, n, i, j, 1);
     for (let k = 0; k < 3; k++) col[o * 3 + k] = base[o * 3 + k] * sh;
+    lod.canopy(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], can, o * 4);
+    for (let k = 0; k < 3; k++) can[o * 4 + k] *= sh;
   }
   // morph targets: a point on the coarser ring's grid (even i and j) stays put and takes the coarser ring's
   // shading; any other point goes to the middle of the coarser triangle edge it lies on (that ring's cells
@@ -195,15 +268,18 @@ function finish(L, b) {
   g.setAttribute("mflat", new THREE.BufferAttribute(mflat, 3));
   g.setAttribute("msph", new THREE.BufferAttribute(msph, 3));
   g.setAttribute("mcol", new THREE.BufferAttribute(mcol, 3));
+  g.setAttribute("canopy", new THREE.BufferAttribute(can, 4));
   g.setIndex(new THREE.Uint32BufferAttribute(idx, 1));
   const mesh = new THREE.Mesh(g, world.material(false, "morph"));
   mesh.frustumCulled = false;
   const grp = new THREE.Group();
   grp.add(mesh);
+  const S = CELLS.indexOf(c) < STAND_LEVELS ? join(b.parts) : null;
+  if (S) { grp.add(points(S)); mesh.material.uniforms.stand.value = 1; }
   grp.userData = { anchor, f: b.f, cx: b.cu / 16, cz: b.cv / 16 };
   if (L.mesh) dispose(L.mesh);
-  L.mesh = grp; L.raw = raw; L.f = b.f; L.cu = b.cu; L.cv = b.cv; L.gu0 = b.gu0; L.gv0 = b.gv0;
-  L.buildMs = performance.now() - b.t0; L.building = null;
+  L.mesh = grp; L.raw = raw; L.bin = S && S.bin; L.stands = S ? S.ws.length / 2 : 0; L.f = b.f; L.cu = b.cu; L.cv = b.cv; L.gu0 = b.gu0; L.gv0 = b.gv0;
+  L.buildMs = performance.now() - b.t0; L.meshMs = performance.now() - tf; L.building = null;
   lod.group.add(grp);
 }
 
@@ -313,11 +389,18 @@ lod.update = function (above, budgetMs = 6) {
     world.place(L.mesh);
     if (!L.show) L.mesh.visible = false;
     if (!L.mesh.visible) continue;
-    const u = L.mesh.children[0].material.uniforms, coarsest = L === top;
-    disc(u.hole.value, L.f, L.cu, L.cv, V.f, V.u, V.v, lod.eyeHole);
-    if (prev) disc(u.hole2.value, L.f, L.cu, L.cv, prev.f, prev.cu, prev.cv, prev.half * HOLE); else u.hole2.value.set(0, 0, 0);
-    u.outer.value.set(0, 0, L.half);
-    u.morph.value.set(coarsest ? 1e30 : L.half * MORPH0, coarsest ? 2e30 : L.half * MORPH1);
+    const coarsest = L === top;
+    for (const m of L.mesh.children) {
+      const u = m.material.uniforms;
+      disc(u.hole.value, L.f, L.cu, L.cv, V.f, V.u, V.v, lod.eyeHole);
+      if (prev) disc(u.hole2.value, L.f, L.cu, L.cv, prev.f, prev.cu, prev.cv, prev.half * HOLE); else u.hole2.value.set(0, 0, 0);
+      u.outer.value.set(0, 0, L.half);
+      u.morph.value.set(coarsest ? 1e30 : L.half * MORPH0, coarsest ? 2e30 : L.half * MORPH1);
+      // stand-ins fade out across the outer part of the last ring that has them
+      if (L === lod.levels[STAND_LEVELS - 1]) u.edge.value.set(L.half * 0.7, L.half * 0.95);
+    }
+    // stand-ins all under half a pixel: not drawn at all
+    if (L.mesh.children[1]) L.mesh.children[1].visible = STAND_W * world.shared.pxScale.value / Math.max(1, above) > 0.5;
     prev = L;
   }
   lod.top = prev;

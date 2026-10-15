@@ -79,6 +79,11 @@ p.look = function (dx, dy) {
 
 // Height above the ground or sea below, in blocks.
 p.altitude = function () {
+  // high up with no chunks loaded, the terrain's surface will do (without trees or houses)
+  if (!world.chunksOn && !world.loaded(p.f, Math.floor(p.u) >> 4, Math.floor(p.v) >> 4)) {
+    const s = world.terrain.surface(p.f, Math.floor(p.u), Math.floor(p.v), P.dir(p.f, p.u, p.v, [0, 0, 0]));
+    return p.y - Math.max(s.h + 1, s.wl + 1, P.SEA);
+  }
   const c = world.chunk(p.f, Math.floor(p.u) >> 4, Math.floor(p.v) >> 4);
   const top = c.top[(Math.floor(p.v) & 15) * 16 + (Math.floor(p.u) & 15)];
   return p.y - Math.max(top + 1, P.SEA);

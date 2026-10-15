@@ -32,6 +32,12 @@ function resize() {
 
 const VIEW_MAX = 24;   // chunks; also the starting view distance
 function setView(v) { world.viewDist = v; }
+// Real chunks are loaded only while a block straight below is at least about a pixel across, and never more
+// than this many blocks above the ground, however big the screen (so a large display doesn't load chunks
+// much higher up). Change it here, or with BF.world.chunkCeiling in the console. Higher up, the distant
+// terrain with its tree and house stand-ins (lod.js) draws everything at the same detail.
+world.chunkCeiling = 1500;
+const bufSize = new THREE.Vector2();
 
 // Fills world.view for this frame: blend k from height, the rotation that lines the sphere up with the
 // player's grid, then fog, sky and the camera's clip range to suit the height.
@@ -57,6 +63,11 @@ function setupView() {
   // ground below stays visible when flying; once the globe shows it moves out to the horizon and,
   // high up, away entirely.
   const above = Math.max(0, p.altitude()), horizon = Math.sqrt(Math.max(0, h) * (2 * P.R + Math.max(0, h)));
+  // pixels across a block one block away; a block straight below is a pixel across at that many blocks up
+  const pxScale = renderer.getDrawingBufferSize(bufSize).y / (2 * Math.tan(camera.fov * Math.PI / 360));
+  sh.pxScale.value = pxScale;
+  const limit = Math.min(world.chunkCeiling, pxScale);
+  world.chunksOn = above < (world.chunksOn ? limit : limit * 0.9);
   const kf = smooth(ALT0, ALT0 + 500, h), lerpLog = (a, b, t) => Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * t);
   const far = lerpLog(r * 0.95 + above, horizon * 1.25, kf) * (1 + 1e4 * smooth(ALT1, 4 * ALT1, h));
   sh.fogFar.value = far;
@@ -411,7 +422,8 @@ function hud(st) {
     `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? "E" : "W"}  ·  layer ${fmt(player.y)} (sea ${P.SEA})  ·  ${mode}  ·  view ${view}\n` +
     `face ${player.f} u ${Math.floor(player.u)} v ${Math.floor(player.v)}  ·  nearest ${cornerLine()}  ·  travelled ${fmt(player.travelled)} of ${fmt(4 * P.N)} around\n` +
     `${climate}  ·  nearest village: ${villageLine()}  ·  ${mobs.list.length} sheep${mobs.lure ? " · holding wheat (sheep follow)" : ""}\n` +
-    `${fps} fps  ·  view ${world.viewDist} chunks  ·  ${st.meshed}/${st.wanted} chunks meshed`;
+    `${fps} fps  ·  view ${world.viewDist} chunks  ·  ` +
+    (world.chunksOn ? `${st.meshed}/${st.wanted} chunks meshed` : `no chunks loaded (blocks below are under a pixel; ceiling ${world.chunkCeiling})`);
 }
 
 $("play").addEventListener("click", start);

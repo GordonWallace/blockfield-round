@@ -43,6 +43,26 @@ t(JUNGLE, 0.92, ["jungle", "jungle", "bush"]); t(TAIGA, 0.5, ["spruce"]); t(OLD_
 t(SNOWY_PLAINS, 0.02, ["spruce"]); t(SNOWY_TAIGA, 0.5, ["spruce"]); t(MEADOW, 0.015, ["oak", "birch"]); t(CHERRY, 0.22, ["cherry"]);
 t(MOUNTAINS, 0.08, ["spruce"]);
 
+// How each kind of tree looks from far away (stand-ins in lod.js): crown width and the height of the crown's
+// middle above the ground, in blocks, and its leaf colour (the leaf block's colour in world.js).
+const CROWN = {
+  oak: [5, 5, 0x4a8a2a], birch: [5, 6, 0x6a9a4a], swamp: [7, 5, 0x4a8a2a], spruce: [5, 6, 0x3a5e3a], tallspruce: [7, 10, 0x3a5e3a],
+  jungle: [7, 12, 0x3a9a24], bush: [5, 1, 0x3a9a24], acacia: [7, 6, 0x7a8a2a], dark: [7, 7, 0x2f5a1c], mangrove: [7, 6, 0x4a7a2a],
+  cherry: [7, 5, 0xf0b8d0], cactus: [1, 2, 0x5a8a3a],
+};
+// Each biome's canopy seen from too far away to make out single trees: the average leaf colour and the
+// fraction of the ground the crowns cover (a crown covers about 0.85 of its square).
+const CANOPY = TREES.map(({ d, kinds }) => {
+  if (!kinds.length) return [0, 0, 0, 0];
+  let r = 0, gr = 0, b = 0, area = 0;
+  for (const k of kinds) {
+    const [w, , c] = CROWN[k];
+    r += (c >> 16 & 255) / 255; gr += (c >> 8 & 255) / 255; b += (c & 255) / 255; area += 0.85 * w * w;
+  }
+  const n = kinds.length;
+  return [r / n, gr / n, b / n, Math.min(1, d * area / n / 16)];
+});
+
 // Rainfall by latitude (degrees): Earth's zonal pattern.
 const RAIN_LAT = [[0, 0.88], [8, 0.78], [15, 0.45], [22, 0.14], [29, 0.22], [38, 0.48], [48, 0.62], [58, 0.58], [68, 0.42], [80, 0.25], [90, 0.2]];
 function rainLat(a) {
@@ -103,7 +123,7 @@ function mapColour(s) {
 }
 
 BF.climate = {
-  NAMES, BANDS, GRASS, TREES, mapColour,
+  NAMES, BANDS, GRASS, TREES, CROWN, CANOPY, mapColour,
   ID: { OCEAN, BEACH, SNOWY_BEACH, STONY_SHORE, RIVER, PLAINS, FOREST, FLOWER_FOREST, BIRCH, DARK_FOREST, SWAMP, MANGROVE, DESERT,
     BADLANDS, SAVANNA, SPARSE_JUNGLE, JUNGLE, TAIGA, OLD_TAIGA, SNOWY_PLAINS, ICE_SPIKES, SNOWY_TAIGA, MEADOW, CHERRY, MOUNTAINS,
     SNOWY_SLOPES, PEAKS, STONY_PEAKS, FROZEN_OCEAN },

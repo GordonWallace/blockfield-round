@@ -73,25 +73,14 @@ function villageName(f, rx, rz) {
 const rot90 = (x, z, k) => { for (let i = 0; i < (k & 3); i++) { const t = x; x = -z; z = t; } return [x, z]; };   // Blockfield blueprints.js
 const plans = new Map();
 
-// The village's blocks, bucketed by chunk: Map chunkKey -> [x, y, z, block] in chart (face grid) coordinates.
-function plan(v) {
-  if (plans.has(v.key)) return plans.get(v.key);
-  const ch = BF.chart(v.f), cells = new Map(), rnd = mulberry(Math.floor(hash(v.rx, v.rz, v.f + 99) * 4294967296));
-  const put = (x, y, z, b) => cells.set(x + "," + y + "," + z, [x, y, z, b]);
-  const surf = new Map(), ground = (x, z) => { const k = x + "," + z; if (!surf.has(k)) surf.set(k, ch.surface(x, z)); return surf.get(k); };
-
-  // well in the centre
+// Where the well and houses go (no blocks yet): { wy, houses: [{ cx, cz, gy, hw, hd, rot, box }] }, in chart
+// (face grid) coordinates. Also used for the distant stand-ins (lod.js), so it is cheap: a few surface samples.
+function layout(v, ground) {
+  const rnd = mulberry(Math.floor(hash(v.rx, v.rz, v.f + 99) * 4294967296));
+  if (!ground) { const ch = BF.chart(v.f); ground = (x, z) => ch.surface(x, z); }
   const wy = ground(v.x, v.z);
-  for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
-    const edge = Math.max(Math.abs(dx), Math.abs(dz)) === 2;
-    for (let y = wy - 3; y <= wy; y++) put(v.x + dx, y, v.z + dz, edge ? B.COBBLE : y === wy ? B.WATER : B.WATER);
-    if (edge) put(v.x + dx, wy + 1, v.z + dz, B.COBBLE);
-    for (let y = wy + 2; y <= wy + 6; y++) if (!edge || (Math.abs(dx) === 2 && Math.abs(dz) === 2 && y < wy + 5)) put(v.x + dx, y, v.z + dz, edge ? B.LOG : B.AIR);
-    put(v.x + dx, wy + 5, v.z + dz, B.ROOF);
-  }
-
   // houses on a ring, doors facing the well; plots must not overlap
-  const n = 4 + Math.floor(rnd() * 6), boxes = [[v.x - 4, v.z - 4, v.x + 4, v.z + 4]];
+  const n = 4 + Math.floor(rnd() * 6), boxes = [[v.x - 4, v.z - 4, v.x + 4, v.z + 4]], houses = [];
   for (let k = 0, tries = 0; k < n && tries < 60; tries++) {
     const a = rnd() * Math.PI * 2, r = 13 + rnd() * 24;
     const cx = v.x + Math.round(Math.cos(a) * r), cz = v.z + Math.round(Math.sin(a) * r);
@@ -104,9 +93,31 @@ function plan(v) {
     const gy = ground(cx, cz);
     if (gy <= P.SEA + 1 || Math.abs(gy - wy) > 6) continue;
     boxes.push(box);
+    houses.push({ cx, cz, gy, hw, hd, rot, box });
+    k++;
+  }
+  return { wy, houses };
+}
+
+// The village's blocks, bucketed by chunk: Map chunkKey -> [x, y, z, block] in chart (face grid) coordinates.
+function plan(v) {
+  if (plans.has(v.key)) return plans.get(v.key);
+  const ch = BF.chart(v.f), cells = new Map();
+  const put = (x, y, z, b) => cells.set(x + "," + y + "," + z, [x, y, z, b]);
+  const surf = new Map(), ground = (x, z) => { const k = x + "," + z; if (!surf.has(k)) surf.set(k, ch.surface(x, z)); return surf.get(k); };
+  const { wy, houses } = layout(v, ground);
+
+  // well in the centre
+  for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+    const edge = Math.max(Math.abs(dx), Math.abs(dz)) === 2;
+    for (let y = wy - 3; y <= wy; y++) put(v.x + dx, y, v.z + dz, edge ? B.COBBLE : y === wy ? B.WATER : B.WATER);
+    if (edge) put(v.x + dx, wy + 1, v.z + dz, B.COBBLE);
+    for (let y = wy + 2; y <= wy + 6; y++) if (!edge || (Math.abs(dx) === 2 && Math.abs(dz) === 2 && y < wy + 5)) put(v.x + dx, y, v.z + dz, edge ? B.LOG : B.AIR);
+    put(v.x + dx, wy + 5, v.z + dz, B.ROOF);
+  }
+  for (const { cx, cz, gy, hw, hd, rot } of houses) {
     house(put, ground, cx, gy, cz, hw, hd, rot);
     path(put, ground, cx, cz, rot, hd, v);
-    k++;
   }
   // bucket by chunk
   const byChunk = new Map();
@@ -115,7 +126,7 @@ function plan(v) {
     if (!byChunk.has(ck)) byChunk.set(ck, []);
     byChunk.get(ck).push(c);
   }
-  const p = { byChunk, houses: boxes.length - 1 };
+  const p = { byChunk, houses: houses.length };
   plans.set(v.key, p);
   return p;
 }
@@ -158,7 +169,7 @@ function mulberry(a) {
 }
 
 // ---------- hooks ----------
-const villages = (BF.villages = { REGION, MARGIN, site, plan, siteOK });
+const villages = (BF.villages = { REGION, MARGIN, site, plan, layout, siteOK, regionOf });
 
 // Called by world.js for every new chunk: writes the blocks of any village overlapping it.
 villages.decorate = function (c) {

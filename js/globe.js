@@ -47,13 +47,18 @@ function request(f, ti, tj) {
 }
 
 function build(tile, raw) {
-  const W = T + 3, y = BF.lod.heights(raw), pos = new Float32Array(n * n * 3), col = new Uint8Array(n * n * 3), grid = new Float32Array(n * n * 2), c = [0, 0, 0];
+  const W = T + 3, y = BF.lod.heights(raw), pos = new Float32Array(n * n * 3), col = new Uint8Array(n * n * 3), grid = new Float32Array(n * n * 2), c = [0, 0, 0, 0];
+  const can = new Uint8Array(n * n * 4);
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     const o = (j + 1) * W + i + 1, v = (j * n + i) * 3, r = P.R + y[o] - P.SEA;
     for (let k = 0; k < 3; k++) pos[v + k] = raw.dir[o * 3 + k] * r;
     BF.lod.colour(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], raw.ice[o], c, 0);
     const sh = BF.lod.shade(raw, y, W, W, i + 1, j + 1, 1);
     for (let k = 0; k < 3; k++) col[v + k] = Math.round(Math.min(1, c[k] * sh) * 255);
+    BF.lod.canopy(raw.h[o], raw.wl[o], raw.top[o], raw.biome[o], c, 0);
+    const q = (j * n + i) * 4;
+    for (let k = 0; k < 3; k++) can[q + k] = Math.round(Math.min(1, c[k] * sh) * 255);
+    can[q + 3] = Math.round(c[3] * 255);
     grid[(j * n + i) * 2] = (tile.ti * T + i) * CELL; grid[(j * n + i) * 2 + 1] = (tile.tj * T + j) * CELL;
   }
   const g = new THREE.BufferGeometry();
@@ -62,6 +67,7 @@ function build(tile, raw) {
   g.setAttribute("sphere", p);
   g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
   g.setAttribute("grid", new THREE.BufferAttribute(grid, 2));
+  g.setAttribute("canopy", new THREE.BufferAttribute(can, 4, true));
   g.setIndex(index);
   const mesh = new THREE.Mesh(g, globe.materials[tile.f]);
   mesh.frustumCulled = false;
@@ -105,7 +111,7 @@ globe.update = function (k) {
     const m = world.unfold(V.f, f);
     if (!m) { u.hole.value.set(0, 0, 0); u.hole2.value.set(0, 0, 0); continue; }   // the far side
     u.unf.value.set(m.A[0], m.A[1], m.t[0], m.A[2], m.A[3], m.t[1], 0, 0, 1);
-    L.disc(u.hole.value, V.f, 0, 0, V.f, V.u, V.v, Math.max(L.eyeHole, world.viewDist * 16 * 0.9));
+    L.disc(u.hole.value, V.f, 0, 0, V.f, V.u, V.v, world.chunksOn ? Math.max(L.eyeHole, world.viewDist * 16 * 0.9) : 0);
     if (top) L.disc(u.hole2.value, V.f, 0, 0, top.f, top.cu, top.cv, top.half * 0.97); else u.hole2.value.set(0, 0, 0);
   }
   const horizon = Math.acos(Math.min(1, P.R / Math.max(P.R, el))) + PEAK;

@@ -39,6 +39,8 @@ const opaque = (b) => solid(b) && b !== B.ICE;
 
 const world = (BF.world = {
   chunks: new Map(), meshes: new Map(), viewDist: 24, terrain: null, scene: null,
+  // false high up, where blocks are smaller than a pixel: no chunks are loaded around the player (main.js decides)
+  chunksOn: true,
   matSolid: null, matWater: null, genCount: 0, meshCount: 0,
 });
 const key = (f, cx, cz) => f * NC * NC + cx * NC + cz;
@@ -46,6 +48,7 @@ const key = (f, cx, cz) => f * NC * NC + cx * NC + cz;
 // Shared by every chunk material, so one write per frame updates them all.
 const shared = {
   k: { value: 0 }, fogColor: { value: new THREE.Color(0x8fbde8) }, fogNear: { value: 80 }, fogFar: { value: 120 },
+  pxScale: { value: 700 },   // pixels across one block one block away (screen height / (2 tan(fov / 2))); main.js sets it
 };
 const VERT = `
 attribute vec3 sphere;
@@ -67,6 +70,18 @@ uniform vec2 morph;   // grid distances from the ring's centre where morphing st
 #ifdef GLOBE
 attribute vec2 grid;  // the globe: grid position on its own face, and the map into the view face's grid
 uniform mat3 unf;
+#endif
+#ifdef CANOPY
+// distant terrain and the globe: the average colour of the tree crowns and the fraction of ground they cover
+attribute vec4 canopy;
+varying vec4 vCanopy;
+#endif
+#ifdef POINTS
+// stand-ins for trees and houses (lod.js): width in blocks and a random number (0 to 255) each
+attribute vec2 ws;
+uniform float pxScale;
+uniform vec2 edge;
+varying float vPx;
 #endif
 void main() {
   vec3 a = (flatM * vec4(position, 1.0)).xyz;
@@ -90,6 +105,19 @@ void main() {
   vColor = col;
   vDist = length(mv.xyz);
   gl_Position = projectionMatrix * mv;
+#ifdef CANOPY
+  vCanopy = canopy;
+#endif
+#ifdef POINTS
+  // drawn at its true size; between one and two pixels across a thinning share of them, and none below that
+  // or towards the outer edge of the last ring with stand-ins (the ground's canopy colour makes up the rest;
+  // see FRAG), so the average colour stays the same
+  float px = ws.x * pxScale / vDist;
+  vPx = px;
+  gl_PointSize = max(px, 1.0);
+  float show = clamp(px - 1.0, 0.0, 1.0) * (1.0 - smoothstep(edge.x, edge.y, length(position.xz)));
+  if (ws.y >= 256.0 * show) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+#endif
 }`;
 const FRAG = `
 uniform vec3 fogColor;
@@ -100,9 +128,18 @@ uniform vec3 tint;
 uniform vec3 hole;
 uniform vec3 hole2;
 uniform vec3 outer;
+uniform float pxScale;
+uniform float stand;
+uniform vec2 edge;
 varying vec3 vColor;
 varying float vDist;
 varying vec2 vG;
+#ifdef CANOPY
+varying vec4 vCanopy;
+#endif
+#ifdef POINTS
+varying float vPx;
+#endif
 void main() {
   // distant terrain leaves a hole where the loaded chunks are and one where the next finer ring is drawn,
   // and each ring stops at its own edge: discs (centre x, z; radius) in the mesh's own grid, so they line
@@ -116,16 +153,33 @@ void main() {
   if ((ou && ov) || (ou && min(vG.y, FACE_N - vG.y) < seam) || (ov && min(vG.x, FACE_N - vG.x) < seam)) inner = false;
 #endif
   if ((hole.z > 0.0 && length(vG - hole.xy) < hole.z) || inner || (outer.z > 0.0 && length(vG - outer.xy) > outer.z)) discard;
-  gl_FragColor = vec4(mix(vColor * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
+  vec3 col = vColor;
+#ifdef CANOPY
+  // Tree crowns: where stand-ins are drawn (stand = 1) the canopy colour gives way as they fade in (see
+  // POINTS); elsewhere the ground always takes it. Either way the average colour holds at every distance.
+  float px = CROWN * pxScale / vDist;
+  col = mix(col, vCanopy.rgb, vCanopy.a * (1.0 - stand * clamp(px - 1.0, 0.0, 1.0) * (1.0 - smoothstep(edge.x, edge.y, length(vG)))));
+#endif
+#ifdef POINTS
+  // round once a few pixels across, a little darker underneath
+  vec2 pc = gl_PointCoord - 0.5;
+  if (vPx > 3.0 && dot(pc, pc) > 0.25) discard;
+  if (vPx > 2.0) col *= 1.05 - 0.35 * gl_PointCoord.y;
+#endif
+  gl_FragColor = vec4(mix(col * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
 }`;
-// kind: "morph" for distant-terrain rings, "globe" for the globe.
+// kind: "morph" for distant-terrain rings, "globe" for the globe, "points" for stand-ins.
+const CROWN = "5.0";   // a typical tree crown's width, for the canopy fade
 function material(water, kind = null) {
+  const defines = kind === "morph" ? { MORPH: 1, CANOPY: 1, CROWN } : kind === "globe" ? { GLOBE: 1, CANOPY: 1, CROWN, FACE_N: P.N.toFixed(1) }
+    : kind === "points" ? { POINTS: 1 } : {};
   const m = new THREE.ShaderMaterial({
-    vertexShader: VERT, fragmentShader: FRAG, defines: kind === "morph" ? { MORPH: 1 } : kind === "globe" ? { GLOBE: 1, FACE_N: P.N.toFixed(1) } : {},
+    vertexShader: VERT, fragmentShader: FRAG, defines,
     uniforms: {
       ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 },
       tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: new THREE.Vector3() }, hole2: { value: new THREE.Vector3() }, outer: { value: new THREE.Vector3() },
-      morph: { value: new THREE.Vector2(1e30, 2e30) }, unf: { value: new THREE.Matrix3() },
+      morph: { value: new THREE.Vector2(1e30, 2e30) }, unf: { value: new THREE.Matrix3() }, stand: { value: 0 },
+      edge: { value: new THREE.Vector2(1e30, 2e30) },
     },
     transparent: water, depthWrite: !water,
   });
@@ -197,6 +251,7 @@ function genChunk(f, cx, cz) {
   return c;
 }
 
+world.loaded = (f, cx, cz) => world.chunks.has(key(f, cx, cz));
 world.chunk = function (f, cx, cz) {
   const k = key(f, cx, cz);
   let c = world.chunks.get(k);
@@ -367,9 +422,9 @@ function wanted(f, u, v) {
 }
 
 // Called each frame: builds missing or edited meshes within a time budget, drops far ones,
-// and places every mesh for the current view (see world.view).
+// and places every mesh for the current view (see world.view). With chunks off, all meshes go.
 world.update = function (budgetMs = 6) {
-  const V = world.view, list = wanted(V.f, V.u, V.v), keep = new Set();
+  const V = world.view, list = world.chunksOn ? wanted(V.f, V.u, V.v) : [], keep = new Set();
   const t0 = performance.now();
   for (const e of list) keep.add(e.k);
   for (const e of list) {
@@ -386,13 +441,13 @@ world.update = function (budgetMs = 6) {
   }
   for (const k of [...world.meshes.keys()]) if (!keep.has(k)) dropMesh(k);
   // forget unedited chunk data well outside the view
-  if (world.chunks.size > list.length * 3) {
+  if (world.chunks.size > Math.max(64, list.length) * 3) {
     for (const [k, c] of world.chunks) if (!keep.has(k) && !c.edited) world.chunks.delete(k);
   }
   for (const g of world.meshes.values()) place(g);
   // how far out every wanted chunk has a mesh (distant terrain fills in beyond that while chunks load)
   const gap = list.find((e) => !world.meshes.has(e.k));
-  world.covered = gap ? Math.max(0, Math.sqrt(gap.d2) - 1) * CS : world.viewDist * CS;
+  world.covered = !world.chunksOn ? 0 : gap ? Math.max(0, Math.sqrt(gap.d2) - 1) * CS : world.viewDist * CS;
   return { wanted: list.length, meshed: world.meshes.size };
 };
 

@@ -54,7 +54,7 @@ Run it with `./run.sh` and open http://localhost:8000.
   proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
 - **Distant terrain** (`js/lod.js`, `js/globe.js`). Beyond the loaded chunks, seven rings of height-field
   meshes show the land at 4, 8, 16 and on up to 256 blocks per cell, out to 33 km, with the same colours as the
-  blocks (forests darkened, since trees aren't drawn there). Each ring morphs into the next across its outer
+  blocks. Each ring morphs into the next across its outer
   part, so detail fades with distance instead of stepping, and each is drawn as a disc around its own centre
   minus the next finer ring, so a ring still being rebuilt leaves the coarser one showing, never a gap. Rivers
   are drawn out there as ribbons along their curves, at least 6 blocks wide. Terrain is sampled by background
@@ -62,6 +62,16 @@ Run it with `./run.sh` and open http://localhost:8000.
   A ring is hidden once its cells are about two pixels across, so out at planet scale only the globe is left:
   the whole planet at 256 blocks per cell (the coarsest ring's detail), built in tiles nearest you first from
   the moment a world starts.
+- **Trees and houses from afar.** The four finest rings (out to about 4 km) carry stand-ins: a dot for each
+  tree and village house, from the same random numbers as the real trees and the villages' own layouts, drawn
+  at their true size while that is at least a pixel or two. Smaller than that they thin out and the ground
+  takes the forest's average leaf colour, which the coarser rings and the globe always show, so a forest
+  keeps its colour at every distance and height, with no line where the trees stop.
+- **Chunks only where blocks show.** Real chunks (and sheep) are loaded only while a block straight below is
+  at least about a pixel across (around 500 to 900 blocks up, depending on the screen), and never more than
+  1,500 blocks above the ground (`world.chunkCeiling` in `js/main.js`, or `BF.world.chunkCeiling` in the
+  console). Above that, the whole view is distant terrain and stand-ins at the same detail everywhere, and
+  nothing loads as you move.
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
@@ -137,4 +147,5 @@ wheat, and + / - change the view distance (it starts at the largest, 24 chunks).
 | `test/villages.js` | Headless run: visits the nearest village and one by a cube corner, counts their blocks |
 | `test/sheep.js` | Headless run: a flock wanders, then follows the player across a face edge |
 | `test/distant.js` | Headless run: distant terrain from 2,500 blocks up, fast flight, a river from above, planet scale |
+| `test/standins.js` | Headless run: a forest from 60 blocks up to planet scale, either side of the chunk cut-off; checks stand-ins reused by a moved ring match a fresh build |
 | `test/lakes.js` | Headless run: the lakes with the most rivers flowing in (HIGH=1: the biggest highland lakes), from 1,800 and 4,000 blocks up |

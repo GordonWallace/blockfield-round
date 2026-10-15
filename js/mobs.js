@@ -220,7 +220,7 @@ function draw(m, up) {
 
 // Simulates mobs within the loaded area around the player and places their models.
 mobs.update = function (dt, player) {
-  const range = world.viewDist * 16;
+  const range = world.chunksOn ? world.viewDist * 16 : 0;   // nothing moves while no chunks are loaded
   const pp = P.pos(player.f, player.u, player.v, player.y, [0, 0, 0]);
   for (const m of mobs.list) {
     const pos3 = P.pos(m.f, m.u, m.v, m.y, [0, 0, 0]);
