@@ -43,24 +43,42 @@ t(JUNGLE, 0.92, ["jungle", "jungle", "bush"]); t(TAIGA, 0.5, ["spruce"]); t(OLD_
 t(SNOWY_PLAINS, 0.02, ["spruce"]); t(SNOWY_TAIGA, 0.5, ["spruce"]); t(MEADOW, 0.015, ["oak", "birch"]); t(CHERRY, 0.22, ["cherry"]);
 t(MOUNTAINS, 0.08, ["spruce"]);
 
-// How each kind of tree looks from far away (stand-ins in lod.js): crown width and the height of the crown's
-// middle above the ground, in blocks, and its leaf colour (the leaf block's colour in world.js).
-const CROWN = {
-  oak: [5, 5, 0x4a8a2a], birch: [5, 6, 0x6a9a4a], swamp: [7, 5, 0x4a8a2a], spruce: [5, 6, 0x3a5e3a], tallspruce: [7, 10, 0x3a5e3a],
-  jungle: [7, 12, 0x3a9a24], bush: [5, 1, 0x3a9a24], acacia: [7, 6, 0x7a8a2a], dark: [7, 7, 0x2f5a1c], mangrove: [7, 6, 0x4a7a2a],
-  cherry: [7, 5, 0xf0b8d0], cactus: [1, 2, 0x5a8a3a],
-};
-// Each biome's canopy seen from too far away to make out single trees: the average leaf colour and the
-// fraction of the ground the crowns cover (a crown covers about 0.85 of its square).
+// How each kind of tree looks from far away (stand-ins in lod.js), following its real shape in flora.js:
+// a trunk and a crown, as boxes. shape(kind, r) takes the tree's own height roll r (flora.js h(5)) and returns
+// [trunk height, trunk width, crown bottom, crown height, crown width, crown top width as a fraction,
+// trunk colour, leaf colour]; colours are the blocks' colours in world.js.
+const LOG = 0x5e4426, BIRCH_LOG = 0xd9d6cc, SPRUCE_LOG = 0x3e2c1a, JUNGLE_LOG = 0x5a4a22, ACACIA_LOG = 0x6a6460;
+const LEAF = { oak: 0x4a8a2a, birch: 0x6a9a4a, swamp: 0x4a8a2a, spruce: 0x3a5e3a, tallspruce: 0x3a5e3a, jungle: 0x3a9a24,
+  bush: 0x3a9a24, acacia: 0x7a8a2a, dark: 0x2f5a1c, mangrove: 0x4a7a2a, cherry: 0xf0b8d0, cactus: 0x5a8a3a };
+function shape(kind, r) {
+  const L = LEAF[kind];
+  switch (kind) {
+    case "oak": case "birch": case "swamp": {
+      const n = (kind === "birch" ? 5 : 4) + Math.floor(r * 3);
+      return [n, 1, n - 3, 4, kind === "swamp" ? 7 : 5, 0.6, kind === "birch" ? BIRCH_LOG : LOG, L];
+    }
+    case "spruce": return [2, 1, 2, 7 + Math.floor(r * 4), 5, 0.2, SPRUCE_LOG, L];
+    case "tallspruce": return [2, 1, 2, 13 + Math.floor(r * 5), 7, 0.15, SPRUCE_LOG, L];
+    case "jungle": { const n = 9 + Math.floor(r * 7); return [n, 1, n - 2, 4, 7, 0.45, JUNGLE_LOG, L]; }
+    case "bush": return [0, 0, 0, 2, 5, 0.6, JUNGLE_LOG, L];
+    case "acacia": { const n = 4 + Math.floor(r * 2); return [n, 1, n, 2, 7, 0.45, ACACIA_LOG, L]; }
+    case "dark": { const n = 6 + Math.floor(r * 3); return [n, 2, n - 2, 3, 7, 0.7, LOG, L]; }
+    case "mangrove": { const n = 5 + Math.floor(r * 3); return [n, 1, n - 2, 3, 7, 0.45, LOG, L]; }
+    case "cherry": { const n = 5 + Math.floor(r * 2); return [n, 1, n - 2, 3, 7, 0.7, LOG, L]; }
+    default: return [0, 0, 0, 1 + Math.floor(r * 3), 1, 1, L, L];   // cactus
+  }
+}
+// Each biome's canopy seen from too far away to make out single trees: the average leaf colour (as dark as
+// the stand-ins are on average, see grid.js) and the share of ground the crowns cover, seen from above.
 const CANOPY = TREES.map(({ d, kinds }) => {
   if (!kinds.length) return [0, 0, 0, 0];
   let r = 0, gr = 0, b = 0, area = 0;
   for (const k of kinds) {
-    const [w, , c] = CROWN[k];
-    r += (c >> 16 & 255) / 255; gr += (c >> 8 & 255) / 255; b += (c & 255) / 255; area += 0.85 * w * w;
+    const c = LEAF[k], w = shape(k, 0.5)[4];
+    r += (c >> 16 & 255) / 255; gr += (c >> 8 & 255) / 255; b += (c & 255) / 255; area += w * w;
   }
-  const n = kinds.length;
-  return [r / n, gr / n, b / n, Math.min(1, d * area / n / 16)];
+  const n = kinds.length, k = 0.9;
+  return [k * r / n, k * gr / n, k * b / n, 1 - Math.exp(-d * area / n / 16)];
 });
 
 // Rainfall by latitude (degrees): Earth's zonal pattern.
@@ -123,7 +141,7 @@ function mapColour(s) {
 }
 
 BF.climate = {
-  NAMES, BANDS, GRASS, TREES, CROWN, CANOPY, mapColour,
+  NAMES, BANDS, GRASS, TREES, CANOPY, mapColour, shape,
   ID: { OCEAN, BEACH, SNOWY_BEACH, STONY_SHORE, RIVER, PLAINS, FOREST, FLOWER_FOREST, BIRCH, DARK_FOREST, SWAMP, MANGROVE, DESERT,
     BADLANDS, SAVANNA, SPARSE_JUNGLE, JUNGLE, TAIGA, OLD_TAIGA, SNOWY_PLAINS, ICE_SPIKES, SNOWY_TAIGA, MEADOW, CHERRY, MOUNTAINS,
     SNOWY_SLOPES, PEAKS, STONY_PEAKS, FROZEN_OCEAN },

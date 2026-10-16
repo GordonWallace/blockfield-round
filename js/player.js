@@ -61,7 +61,7 @@ function setHeading(h) {
   const [du, dv] = P.toGrid(h, fr), l = Math.hypot(du, dv) || 1;
   p.hu = du / l; p.hv = dv / l;
 }
-p.setHeading = setHeading;
+p.setHeading = (h) => { setHeading(h); derive(); };
 
 p.place = function (f, u, v, y) {
   p.f = f; p.u = u; p.v = v; p.y = y; p.vy = 0;
@@ -75,6 +75,8 @@ p.look = function (dx, dy) {
   const hu = p.hu * c + p.hv * s, hv = p.hv * c - p.hu * s, l = Math.hypot(hu, hv);
   p.hu = hu / l; p.hv = hv / l;
   p.pitch = Math.max(-1.55, Math.min(1.55, p.pitch - dy * 0.0025));
+  // the round view keeps facing as a 3D heading between frames, so it must see this turn
+  derive();
 };
 
 // Height above the ground or sea below, in blocks.

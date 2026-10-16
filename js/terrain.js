@@ -21,17 +21,101 @@ BF.makeTerrain = function (seed) {
   const climate = BF.makeClimate(seed), CB = BF.climate.ID;
   const out = { h: 0, hf: 0, land: 0, temp: 0, rain: 0, band: 0, elat: 0, biome: 0, top: 0, sub: 0, ice: false };
 
+  // The continents are turned (one rotation per seed, chosen below) so that every cube corner lies in open
+  // ocean that is part of a real sea, not a lake cut out of a continent.
+  let RM = [1, 0, 0, 0, 1, 0, 0, 0, 1], cornerSea = 0;
+  function cont(x, y, z) {   // continent value (land where > 0) at unit direction (x, y, z), coarse
+    const X = (RM[0] * x + RM[1] * y + RM[2] * z) * R, Y = (RM[3] * x + RM[4] * y + RM[5] * z) * R, Z = (RM[6] * x + RM[7] * y + RM[8] * z) * R;
+    const wx = nB.fbm3(X / WP, Y / WP, Z / WP, 3) * WA;
+    const wy = nB.fbm3(X / WP + 31.7, Y / WP, Z / WP, 3) * WA;
+    const wz = nB.fbm3(X / WP + 57.3, Y / WP, Z / WP, 3) * WA;
+    return nA.fbm3((X + wx) / C, (Y + wy) / C, (Z + wz) / C, 5) - LAND;
+  }
+  // Corners in the sea: the continents are turned so every corner is close to open sea, and a corner that
+  // isn't already in it gets a gulf running out to it (see sample). Open sea here: 40 km of unbroken sea
+  // along a straight line, too long for an inland lake.
+  const KS = [];   // per corner: unit direction c, and its gulf's end direction g (null when none is needed)
+  for (let k = 0; k < 8; k++) { const l = Math.sqrt(3); KS.push({ c: [(k & 1 ? -1 : 1) / l, (k & 2 ? -1 : 1) / l, (k & 4 ? -1 : 1) / l], g: null, n: null, a: 0 }); }
+  const DIRS = 12, STEP = 2000, OPEN = 40000;
+  function ray(c, i, r) {   // direction at distance r from corner c, heading i of DIRS
+    let ex = -c[1], ey = c[0]; const el = Math.hypot(ex, ey) || 1; ex /= el; ey /= el;
+    const fx = -c[2] * ey, fy = c[2] * ex, fz = c[0] * ey - c[1] * ex;
+    const t = r / R, cs = Math.cos(t), sn = Math.sin(t), a = i * 2 * Math.PI / DIRS, ca = Math.cos(a), sa = Math.sin(a);
+    return [c[0] * cs + (ex * ca + fx * sa) * sn, c[1] * cs + (ey * ca + fy * sa) * sn, c[2] * cs + fz * sa * sn];
+  }
+  // Distance (under limit) from corner c to where open sea starts along the best heading, and that heading.
+  function reach(c, limit) {
+    let best = Infinity, bi = 0;
+    for (let i = 0; i < DIRS; i++) {
+      let run = 0;
+      for (let r = 0; r < Math.min(best, limit) + OPEN; r += STEP) {
+        const d = ray(c, i, r);
+        if (cont(d[0], d[1], d[2]) < -0.03) { run += STEP; if (run >= OPEN) { best = r - OPEN + STEP; bi = i; break; } }
+        else { run = 0; if (r >= Math.min(best, limit)) break; }
+      }
+    }
+    return [best, bi];
+  }
+  {
+    const nR = BF.makeNoise(seed ^ 0x2c1b3c6d);
+    let best = 80000, bestM = RM, order = [0, 1, 2, 3, 4, 5, 6, 7];
+    for (let i = 0; i < 300; i++) {
+      // a uniformly random rotation (Shoemake's quaternion)
+      const u1 = nR.hash(i, 1), u2 = nR.hash(i, 2) * 2 * Math.PI, u3 = nR.hash(i, 3) * 2 * Math.PI;
+      const a = Math.sqrt(1 - u1), b = Math.sqrt(u1), qx = a * Math.sin(u2), qy = a * Math.cos(u2), qz = b * Math.sin(u3), qw = b * Math.cos(u3);
+      RM = [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw),
+        2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw),
+        2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)];
+      let worst = 0;
+      for (let n = 0; n < 8 && worst < best; n++) {
+        const d = reach(KS[order[n]].c, best)[0];
+        if (d > worst) { worst = d; if (d >= best) order = [order[n], ...order.filter((o) => o !== order[n])]; }   // check the hard corner first next time
+      }
+      if (worst < best) { best = worst; bestM = RM; }
+    }
+    RM = bestM;
+    cornerSea = best;
+    for (const K of KS) {
+      const [d, i] = reach(K.c, Infinity);
+      if (!(d > 0) || d === Infinity) continue;
+      K.g = ray(K.c, i, d + 3000);
+      const n = [K.c[1] * K.g[2] - K.c[2] * K.g[1], K.c[2] * K.g[0] - K.c[0] * K.g[2], K.c[0] * K.g[1] - K.c[1] * K.g[0]], nl = Math.hypot(...n);
+      K.n = n.map((v) => v / nl); K.a = (d + 3000) / R;   // the gulf's plane, and its length as an angle
+    }
+  }
+  // How far (blocks) direction (x, y, z), next to corner K, is from K's gulf, or Infinity without one; the
+  // gulf's centre line wanders, so it doesn't run dead straight.
+  function gulf(K, x, y, z) {
+    if (!K.g) return Infinity;
+    const c = K.c, n = K.n, off = x * n[0] + y * n[1] + z * n[2];
+    // along the gulf: the angle from c towards g in their plane
+    const t = [n[1] * c[2] - n[2] * c[1], n[2] * c[0] - n[0] * c[2], n[0] * c[1] - n[1] * c[0]];
+    const along = Math.atan2(x * t[0] + y * t[1] + z * t[2], x * c[0] + y * c[1] + z * c[2]);
+    const wob = nC.n3(x * R / 9000, y * R / 9000, z * R / 9000) * 2500;
+    const side = Math.abs(off * R + wob);
+    if (along < 0) return Math.hypot(side, along * R);
+    if (along > K.a) return Math.hypot(side, (along - K.a) * R);
+    return side;
+  }
+
   // Surface at unit direction (x, y, z). detail = false skips the small-scale noise (planet map).
   function sample(x, y, z, detail = true, groundOnly = false) {
-    const X = x * R, Y = y * R, Z = z * R;
+    const X = (RM[0] * x + RM[1] * y + RM[2] * z) * R, Y = (RM[3] * x + RM[4] * y + RM[5] * z) * R, Z = (RM[6] * x + RM[7] * y + RM[8] * z) * R;
     const wx = nB.fbm3(X / WP, Y / WP, Z / WP, 3) * WA;
     const wy = nB.fbm3(X / WP + 31.7, Y / WP, Z / WP, 3) * WA;
     const wz = nB.fbm3(X / WP + 57.3, Y / WP, Z / WP, 3) * WA;
     const c = nA.fbm3((X + wx) / C, (Y + wy) / C, (Z + wz) / C, detail ? 9 : 5);
-    // The 8 cube corners are always open ocean (land fades out from 4 km to 1.5 km), so the round view
-    // drawn there (see main.js, corner mode) is only ever water.
+    // The 8 cube corners are always open ocean (the continents are turned to put them in open sea, and any
+    // island left fades out from 4 km to 1.5 km), so the round view drawn there (main.js, corner mode) is
+    // only ever water.
     const corner = Math.acos(Math.min(1, (Math.abs(x) + Math.abs(y) + Math.abs(z)) / Math.sqrt(3))) * R;
-    const land = c - LAND - 1.2 * smooth(4000, 1500, corner);
+    let land = c - LAND - 1.2 * smooth(4000, 1500, corner);
+    if (corner < 90000) {
+      const K = KS[(x < 0 ? 1 : 0) + (y < 0 ? 2 : 0) + (z < 0 ? 4 : 0)];
+      // a gulf 3 to 6 km wide, by a noise along it
+      const g = gulf(K, x, y, z), w = 2200 + 1200 * nC.n3(X / 7000 + 50, Y / 7000, Z / 7000);
+      if (g < w + 2000) land = Math.min(land, land - 1.2 * smooth(w + 2000, w, g));
+    }
     let h;
     if (land < 0) {
       h = SEA - 3 - 55 * smooth(0, 0.12, -land) + (detail ? nC.n3(X / 60, Y / 60, Z / 60) * 3 : 0);
@@ -134,6 +218,6 @@ BF.makeTerrain = function (seed) {
     return s;
   }
 
-  return { sample, surface, column, rivers, seed };
+  return { sample, surface, column, rivers, seed, cornerSea };
 };
 })();

@@ -1,7 +1,8 @@
 // Distant terrain: rings of height-field meshes around the player, each twice as coarse as the last, so that
 // from high up the land well beyond the loaded chunks shows its real shape, colours and rivers.
 //
-// Level 0 has a cell every 4 blocks out to 512 blocks, then 8 out to 1 km, and so on to 256 out to 33 km;
+// Level 0 has a cell every 4 blocks out to 1 km, then 8 out to 2 km, and so on to 256 out to 65 km (a cell is
+// 1/128 to 1/256 of its distance, so a few pixels across, near or far);
 // past that the globe (globe.js) has the same 256-block detail everywhere. Each ring is drawn as a disc around
 // its own centre, minus the disc of the next finer ring and the loaded chunks, so a ring that is still being
 // rebuilt never leaves a gap: the coarser ring shows there instead. Across the outer part of its disc each
@@ -11,26 +12,30 @@
 // A ring is hidden once its cells are smaller than a pixel or so, which, out at planet scale, leaves the
 // globe alone, with even detail.
 //
-// Trees and village houses: the four finest rings carry stand-ins (a point each, sampled in the workers from
-// the same random numbers as the real trees), drawn at their true size while that is a pixel or more. Below
-// a pixel they thin out and the ground takes the canopy's average colour instead (world.js, CANOPY), which
-// every ring and the globe use, so a forest keeps its colour at every distance and height.
+// Trees and village houses: the six finest rings carry stand-ins out to about 14 km, made in the workers from
+// the same random numbers as the real trees and the villages' own layouts (grid.js). The nearest ring draws
+// each as boxes (trunk and crown, walls and roof), the others as square points; from 2 km out they keep only
+// some. They show until a 10-block patch is under a pixel; beyond that, and wherever they thin out, the
+// ground takes the canopy's average colour instead (world.js, CANOPY), which every ring and the globe use,
+// so a forest keeps its colour at every distance and height.
 (() => {
 "use strict";
 const BF = (window.BF = window.BF || {});
 const P = BF.planet, world = BF.world;
 const CELLS = [4, 8, 16, 32, 64, 128, 256];
-const HALF = 128, EXT = 136;   // cells from a ring's centre to the edge of its disc, and of its mesh
-const SHOW_ABOVE = 40;         // blocks above the ground at which distant terrain is drawn
+const HALF = 256, EXT = 272;   // cells from a ring's centre to the edge of its disc, and of its mesh
 const HIDE = 1500;             // a ring is hidden above this many times its cell size (cells are then ~2 pixels)
 const MOVE = 0.2;              // a ring is rebuilt once the player is this fraction of its radius from its centre
 const HOLE = 0.97, MORPH0 = 0.6, MORPH1 = 0.95;   // fractions of a ring's radius
 const RIBBON_HIDE = 9000;      // rivers drawn as ribbons are hidden above this (narrower than a pixel)
 const WATER = [0.27, 0.43, 0.8], ICE = [0.66, 0.78, 0.94];
-const STAND_LEVELS = 4;        // rings with tree and house stand-ins (cells of 4 to 32 blocks)
-const STAND_W = 9;             // the widest stand-in, in blocks (for hiding them all once smaller than half a pixel)
+const STAND_LEVELS = 6;        // rings with tree and house stand-ins (cells of 4 to 128 blocks)
+const STAND_MAX = 14000;       // blocks from the player: stand-ins further out are never shown (under 1 px per 10 blocks
+                               // on any screen up to 4K), so none are made past that plus how far a ring moves (MOVE)
+const BOX_LEVELS = 1;          // of those, the ones drawn as boxes (the rest are points)
+const THIN = [0, 0, 1, 2, 3, 4];   // ring by ring: one tree cell in 2^m x 2^m kept (see grid.js)
 
-const lod = (BF.lod = { group: null, levels: [], active: false, top: null, eyeHole: 0 });
+const lod = (BF.lod = { group: null, levels: [], active: false, top: null, eyeHole: 0, standIns: CELLS.map(() => true) });
 
 lod.reset = function (scene) {
   if (lod.group) {
@@ -116,7 +121,8 @@ const FIELDS = ["h", "wl", "top", "biome", "ice", "ok"];
 // asks the workers for the rest.
 function start(L, f, cu, cv) {
   const c = L.cell, n = 2 * EXT + 1, gu0 = cu - EXT * c, gv0 = cv - EXT * c;
-  const anchor = P.pos(f, cu, cv, P.SEA, [0, 0, 0]), stand = CELLS.indexOf(c) < STAND_LEVELS ? { cu, cv, anchor, gu0, gv0 } : null;
+  const lv = CELLS.indexOf(c), anchor = P.pos(f, cu, cv, P.SEA, [0, 0, 0]);
+  const stand = lv < STAND_LEVELS ? { cu, cv, anchor, gu0, gv0, m: THIN[lv], max: STAND_MAX + MOVE * c * HALF } : null;
   const b = { f, cu, cv, gu0, gv0, n, anchor, pending: 0, t0: performance.now(), raw: BF.gridJob.alloc({ nx: n, ny: n }), parts: [] };
   let rects = [[0, n, 0, n]];   // [j0, j1, i0, i1] still to sample
   const old = L.raw && L.f === f ? L : null;
@@ -162,27 +168,26 @@ function start(L, f, cu, cv) {
 
 // The stand-ins of old ring L on the samples that new ring b keeps (columns i0 to i1 and rows j0 to j1 of b,
 // which are di and dj further on in L), moved to b's centre and anchor (see BF.gridJob.stand for the form).
-const SK = { flat: 3, sph: 3, col: 3, ws: 2, bin: 2 };
-const SA = { flat: Float32Array, sph: Float32Array, col: Uint8Array, ws: Uint8Array, bin: Uint16Array };
+const SK = { base: 3, sph: 3, top: 3, low: 3, a: 4, b: 4, c: 1, bin: 2 };
+const SA = { base: Float32Array, sph: Float32Array, bin: Uint16Array };
 function keep(L, b, i0, i1, j0, j1, di, dj) {
-  const pts = L.mesh && L.mesh.children[1], n = pts ? L.bin.length / 2 : 0, idx = [];
+  const S = L.stand, n = S ? S.c.length : 0, idx = [];
   for (let q = 0; q < n; q++) {
-    const i = L.bin[2 * q] - di, j = L.bin[2 * q + 1] - dj;
+    const i = S.bin[2 * q] - di, j = S.bin[2 * q + 1] - dj;
     if (i >= i0 && i < i1 && j >= j0 && j < j1) idx.push(q);
   }
   const out = {};
-  for (const k in SK) out[k] = new SA[k](idx.length * SK[k]);
+  for (const k in SK) {
+    const m = SK[k], src = S && S[k], a = out[k] = new (SA[k] || Uint8Array)(idx.length * m);
+    for (let p = 0; p < idx.length; p++) for (let x = 0; x < m; x++) a[p * m + x] = src[idx[p] * m + x];
+  }
   if (!idx.length) return out;
-  const A = pts.geometry.attributes, fl = A.position.array, sp = A.sphere.array, cl = A.color.array, ws = A.ws.array;
   const du = L.cu - b.cu, dv = L.cv - b.cv, an = L.mesh.userData.anchor;
   const ax = an[0] - b.anchor[0], ay = an[1] - b.anchor[1], az = an[2] - b.anchor[2];
   for (let p = 0; p < idx.length; p++) {
-    const q = idx[p];
-    out.flat[3 * p] = fl[3 * q] + du; out.flat[3 * p + 1] = fl[3 * q + 1]; out.flat[3 * p + 2] = fl[3 * q + 2] + dv;
-    out.sph[3 * p] = sp[3 * q] + ax; out.sph[3 * p + 1] = sp[3 * q + 1] + ay; out.sph[3 * p + 2] = sp[3 * q + 2] + az;
-    out.col[3 * p] = cl[3 * q]; out.col[3 * p + 1] = cl[3 * q + 1]; out.col[3 * p + 2] = cl[3 * q + 2];
-    out.ws[2 * p] = ws[2 * q]; out.ws[2 * p + 1] = ws[2 * q + 1];
-    out.bin[2 * p] = L.bin[2 * q] - di; out.bin[2 * p + 1] = L.bin[2 * q + 1] - dj;
+    out.base[3 * p] += du; out.base[3 * p + 2] += dv;
+    out.sph[3 * p] += ax; out.sph[3 * p + 1] += ay; out.sph[3 * p + 2] += az;
+    out.bin[2 * p] -= di; out.bin[2 * p + 1] -= dj;
   }
   return out;
 }
@@ -191,23 +196,36 @@ function join(parts) {
   for (const k in SK) {
     let len = 0;
     for (const p of parts) len += p[k].length;
-    const a = new SA[k](len);
+    const a = new (SA[k] || Uint8Array)(len);
     let o = 0;
     for (const p of parts) { a.set(p[k], o); o += p[k].length; }
     out[k] = a;
   }
   return out;
 }
-// The stand-ins as points, laid out like the ring's mesh.
-function points(S) {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(S.flat, 3));
-  g.setAttribute("sphere", new THREE.BufferAttribute(S.sph, 3));
-  g.setAttribute("color", new THREE.BufferAttribute(S.col, 3, true));
-  g.setAttribute("ws", new THREE.BufferAttribute(S.ws, 2));
-  const pts = new THREE.Points(g, world.material(false, "points"));
-  pts.frustumCulled = false;
-  return pts;
+// A unit box's sides and top, twice (part 0: trunk or walls; part 1: crown or roof), each face with its
+// shade as world.js shades block faces; corners at x, z = -0.5 or 0.5 and y = 0 or 1.
+const BOX = (() => {
+  const pos = [], part = [], shade = [], idx = [];
+  const face = (p, q, s, pt) => { const n = pos.length / 3; for (const v of q) pos.push(...v); for (let i = 0; i < 4; i++) { part.push(pt); shade.push(s); } idx.push(n, n + 1, n + 2, n, n + 2, n + 3); };
+  for (const pt of [0, 1]) {
+    face(0, [[-0.5, 1, -0.5], [0.5, 1, -0.5], [0.5, 1, 0.5], [-0.5, 1, 0.5]], 1, pt);
+    for (const x of [-0.5, 0.5]) face(0, [[x, 0, -0.5], [x, 1, -0.5], [x, 1, 0.5], [x, 0, 0.5]], 0.82, pt);
+    for (const z of [-0.5, 0.5]) face(0, [[-0.5, 0, z], [-0.5, 1, z], [0.5, 1, z], [0.5, 0, z]], 0.68, pt);
+  }
+  return { pos: new THREE.Float32BufferAttribute(pos, 3), part: new THREE.Float32BufferAttribute(part, 1), shade: new THREE.Float32BufferAttribute(shade, 1), idx: new THREE.Uint16BufferAttribute(idx, 1) };
+})();
+const ONE = new THREE.Float32BufferAttribute([0, 0, 0], 3);
+// The stand-ins drawn as boxes or points, one instance each.
+function standIns(S, boxes) {
+  const g = new THREE.InstancedBufferGeometry();
+  if (boxes) { g.setAttribute("position", BOX.pos); g.setAttribute("part", BOX.part); g.setAttribute("shade", BOX.shade); g.setIndex(BOX.idx); }
+  else g.setAttribute("position", ONE);
+  for (const k in SK) if (k !== "bin") g.setAttribute(k, new THREE.InstancedBufferAttribute(S[k], SK[k], !SA[k] && (k === "top" || k === "low")));
+  g.instanceCount = S.c.length;
+  const m = boxes ? new THREE.Mesh(g, world.material(false, "boxes")) : new THREE.Points(g, world.material(false, "points"));
+  m.frustumCulled = false;
+  return m;
 }
 
 // Builds ring L's mesh from its samples.
@@ -274,11 +292,16 @@ function finish(L, b) {
   mesh.frustumCulled = false;
   const grp = new THREE.Group();
   grp.add(mesh);
-  const S = CELLS.indexOf(c) < STAND_LEVELS ? join(b.parts) : null;
-  if (S) { grp.add(points(S)); mesh.material.uniforms.stand.value = 1; }
+  const lv = CELLS.indexOf(c), S = lv < STAND_LEVELS ? join(b.parts) : null;
+  if (S) {
+    const si = standIns(S, lv < BOX_LEVELS), fr = P.frame(b.f, b.cu, b.cv, P.SEA, {}), U = fr.eu, Up = fr.up, W = fr.ev;
+    si.material.uniforms.frame.value.set(U[0], Up[0], W[0], U[1], Up[1], W[1], U[2], Up[2], W[2]);
+    grp.add(si);
+    mesh.material.uniforms.stand.value = 1 / (1 << 2 * THIN[lv]);   // the share of trees drawn as stand-ins
+  }
   grp.userData = { anchor, f: b.f, cx: b.cu / 16, cz: b.cv / 16 };
   if (L.mesh) dispose(L.mesh);
-  L.mesh = grp; L.raw = raw; L.bin = S && S.bin; L.stands = S ? S.ws.length / 2 : 0; L.f = b.f; L.cu = b.cu; L.cv = b.cv; L.gu0 = b.gu0; L.gv0 = b.gv0;
+  L.mesh = grp; L.raw = raw; L.stand = S; L.stands = S ? S.c.length : 0; L.f = b.f; L.cu = b.cu; L.cv = b.cv; L.gu0 = b.gu0; L.gv0 = b.gv0;
   L.buildMs = performance.now() - b.t0; L.meshMs = performance.now() - tf; L.building = null;
   lod.group.add(grp);
 }
@@ -300,6 +323,9 @@ function ribbons(f, cu, cv, ext) {
     if (!A || !Bq || Math.min(Math.abs(A[0] - cu), Math.abs(Bq[0] - cu)) > ext + 2000 || Math.min(Math.abs(A[1] - cv), Math.abs(Bq[1] - cv)) > ext + 2000) continue;
     const c = RV.view(li, f), r0 = RV.rs[n], r1 = RV.rs[RV.down[n]], hw = Math.max(MINW, c.w), K = c.xs.length - 1;
     const prof = RV.geom(li).r;   // the water profile, if the link has been read already
+    // a river mouth: the part out over the sea isn't drawn (the sea is there already)
+    const mouth = RV.sea[RV.down[n]], T = world.terrain, q3 = [0, 0, 0];
+    let wetPrev = false;
     for (let k = 0; k <= K; k++) {
       const x = c.xs[k], y = c.ys[k];
       const k0 = Math.max(0, k - 1), k1 = Math.min(K, k + 1), tx = c.xs[k1] - c.xs[k0], ty = c.ys[k1] - c.ys[k0], tl = Math.hypot(tx, ty) || 1;
@@ -315,7 +341,10 @@ function ribbons(f, cu, cv, ext) {
         sph.push(q[0] * rr - anchor[0], q[1] * rr - anchor[1], q[2] * rr - anchor[2]);
         col.push(WATER[0], WATER[1], WATER[2]);
       }
-      if (k > 0 && Math.abs(x - cu) <= ext && Math.abs(y - cv) <= ext) idx.push(base - 2, base, base - 1, base - 1, base, base + 1);
+      let wet = false;
+      if (mouth) { P.wrap(f, x, y, g); P.dir(g.f, g.u, g.v, q3); wet = T.sample(q3[0], q3[1], q3[2], true, true).hf < P.SEA; }
+      if (k > 0 && !wet && !wetPrev && Math.abs(x - cu) <= ext && Math.abs(y - cv) <= ext) idx.push(base - 2, base, base - 1, base - 1, base, base + 1);
+      wetPrev = wet;
     }
   }
   const geo = new THREE.BufferGeometry();
@@ -355,7 +384,7 @@ lod.update = function (above, budgetMs = 6) {
     speed += (Math.hypot(V.u - last.u, V.v - last.v) / dt - speed) * Math.min(1, dt * 2);
   }
   last = { f: V.f, u: V.u, v: V.v, t: now };
-  lod.active = above > SHOW_ABOVE || V.k > 0;
+  lod.active = true;   // at every height, so the view always reaches the horizon
   lod.group.visible = lod.active;
   if (!lod.active) { lod.top = null; return; }
   // river ribbons cover the largest ring; they are quick, so they are built here
@@ -392,19 +421,35 @@ lod.update = function (above, budgetMs = 6) {
     const coarsest = L === top;
     for (const m of L.mesh.children) {
       const u = m.material.uniforms;
-      disc(u.hole.value, L.f, L.cu, L.cv, V.f, V.u, V.v, lod.eyeHole);
-      if (prev) disc(u.hole2.value, L.f, L.cu, L.cv, prev.f, prev.cu, prev.cv, prev.half * HOLE); else u.hole2.value.set(0, 0, 0);
+      if (m.material.defines.CHARTS) cuts(u, L.mesh.userData.anchor, V, lod.eyeHole, prev);
+      else {   // stand-ins: tested per tree in the ring's own grid (a mismatch near a corner only moves a few trees)
+        disc(u.hole.value, L.f, L.cu, L.cv, V.f, V.u, V.v, lod.eyeHole);
+        if (prev) disc(u.hole2.value, L.f, L.cu, L.cv, prev.f, prev.cu, prev.cv, prev.half * HOLE); else u.hole2.value.set(0, 0, 0);
+      }
       u.outer.value.set(0, 0, L.half);
       u.morph.value.set(coarsest ? 1e30 : L.half * MORPH0, coarsest ? 2e30 : L.half * MORPH1);
       // stand-ins fade out across the outer part of the last ring that has them
       if (L === lod.levels[STAND_LEVELS - 1]) u.edge.value.set(L.half * 0.7, L.half * 0.95);
     }
-    // stand-ins all under half a pixel: not drawn at all
-    if (L.mesh.children[1]) L.mesh.children[1].visible = STAND_W * world.shared.pxScale.value / Math.max(1, above) > 0.5;
+    // stand-ins too far to show from this height, or all among the loaded chunks: not drawn at all
+    if (L.mesh.children[1]) L.mesh.children[1].visible = lod.standIns[CELLS.indexOf(L.cell)] && 10 * world.shared.pxScale.value > above && lod.eyeHole < L.half * 0.95;
     prev = L;
   }
   lod.top = prev;
 };
+
+// Sets the cuts of a ring or globe material (world.js, CHARTS): the loaded chunks' disc of radius r around the
+// player, in the view face's grid, and the finer ring's own disc, in that ring's grid.
+function cuts(u, anchor, V, r, fine) {
+  u.anchor.value.set(anchor[0], anchor[1], anchor[2]);
+  u.hole.value.set(V.u, V.v, r);
+  for (let i = 0; i < 6; i++) world.unfoldMatrix(u.toHole.value[i], V.f, i);
+  if (!fine) { u.hole2.value.set(0, 0, 0); return; }
+  u.hole2.value.set(fine.cu, fine.cv, fine.half * HOLE);
+  for (let i = 0; i < 6; i++) world.unfoldMatrix(u.toHole2.value[i], fine.f, i);
+  u.seam2.value = 2 * fine.cell + 8;
+}
+lod.cuts = cuts;
 
 // Sets out (x, z, radius) to a disc of radius r around point (u, v) of face g, in the grid of face f
 // relative to (cu, cv); no disc if g can't be unfolded next to f.

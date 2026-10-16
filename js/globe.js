@@ -93,6 +93,7 @@ globe.reset = function (scene) {
 };
 
 // Called each frame with the current blend: places the globe and hides tiles beyond the horizon.
+const ORIGIN = [0, 0, 0];
 globe.update = function (k) {
   globe.group.visible = k > 0;
   if (k <= 0) return;
@@ -111,8 +112,7 @@ globe.update = function (k) {
     const m = world.unfold(V.f, f);
     if (!m) { u.hole.value.set(0, 0, 0); u.hole2.value.set(0, 0, 0); continue; }   // the far side
     u.unf.value.set(m.A[0], m.A[1], m.t[0], m.A[2], m.A[3], m.t[1], 0, 0, 1);
-    L.disc(u.hole.value, V.f, 0, 0, V.f, V.u, V.v, world.chunksOn ? Math.max(L.eyeHole, world.viewDist * 16 * 0.9) : 0);
-    if (top) L.disc(u.hole2.value, V.f, 0, 0, top.f, top.cu, top.cv, top.half * 0.97); else u.hole2.value.set(0, 0, 0);
+    L.cuts(u, ORIGIN, V, world.chunksOn ? Math.max(L.eyeHole, world.viewDist * 16 * 0.9) : 0, top);
   }
   const horizon = Math.acos(Math.min(1, P.R / Math.max(P.R, el))) + PEAK;
   for (const t of globe.tiles) {

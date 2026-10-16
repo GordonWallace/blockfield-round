@@ -38,7 +38,7 @@ const GRASS = BF.climate.GRASS;
 const opaque = (b) => solid(b) && b !== B.ICE;
 
 const world = (BF.world = {
-  chunks: new Map(), meshes: new Map(), viewDist: 24, terrain: null, scene: null,
+  chunks: new Map(), meshes: new Map(), viewDist: 32, terrain: null, scene: null,
   // false high up, where blocks are smaller than a pixel: no chunks are loaded around the player (main.js decides)
   chunksOn: true,
   matSolid: null, matWater: null, genCount: 0, meshCount: 0,
@@ -49,6 +49,10 @@ const key = (f, cx, cz) => f * NC * NC + cx * NC + cz;
 const shared = {
   k: { value: 0 }, fogColor: { value: new THREE.Color(0x8fbde8) }, fogNear: { value: 80 }, fogFar: { value: 120 },
   pxScale: { value: 700 },   // pixels across one block one block away (screen height / (2 tan(fov / 2))); main.js sets it
+  // each face's outward normal and grid axes, for finding a point's face and grid position in a shader (CHARTS)
+  faceN: { value: P.FACES.map((F) => new THREE.Vector3(...F.n)) },
+  faceA: { value: P.FACES.map((F) => new THREE.Vector3(...F.a)) },
+  faceB: { value: P.FACES.map((F) => new THREE.Vector3(...F.b)) },
 };
 const VERT = `
 attribute vec3 sphere;
@@ -76,23 +80,24 @@ uniform mat3 unf;
 attribute vec4 canopy;
 varying vec4 vCanopy;
 #endif
-#ifdef POINTS
-// stand-ins for trees and houses (lod.js): width in blocks and a random number (0 to 255) each
-attribute vec2 ws;
-uniform float pxScale;
-uniform vec2 edge;
-varying float vPx;
+#ifdef CHARTS
+uniform vec3 anchor;   // what sphere positions are relative to (the planet's centre for the globe)
+varying vec3 vP;       // position relative to the planet's centre
 #endif
 void main() {
   vec3 a = (flatM * vec4(position, 1.0)).xyz;
   vec3 b = (sphM * vec4(sphere, 1.0)).xyz;
   vec3 col = color;
+#ifdef CHARTS
+  vP = anchor + sphere;
+#endif
 #ifdef MORPH
   float m = smoothstep(morph.x, morph.y, length(position.xz));
   if (m > 0.0) {
     a = mix(a, (flatM * vec4(mflat, 1.0)).xyz, m);
     b = mix(b, (sphM * vec4(msph, 1.0)).xyz, m);
     col = mix(color, mcol, m);
+    vP = anchor + mix(sphere, msph, m);
   }
 #endif
 #ifdef GLOBE
@@ -108,16 +113,6 @@ void main() {
 #ifdef CANOPY
   vCanopy = canopy;
 #endif
-#ifdef POINTS
-  // drawn at its true size; between one and two pixels across a thinning share of them, and none below that
-  // or towards the outer edge of the last ring with stand-ins (the ground's canopy colour makes up the rest;
-  // see FRAG), so the average colour stays the same
-  float px = ws.x * pxScale / vDist;
-  vPx = px;
-  gl_PointSize = max(px, 1.0);
-  float show = clamp(px - 1.0, 0.0, 1.0) * (1.0 - smoothstep(edge.x, edge.y, length(position.xz)));
-  if (ws.y >= 256.0 * show) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-#endif
 }`;
 const FRAG = `
 uniform vec3 fogColor;
@@ -131,55 +126,140 @@ uniform vec3 outer;
 uniform float pxScale;
 uniform float stand;
 uniform vec2 edge;
+// how far stand-ins show at distance d: fully while a 10-block patch is 2 pixels or more, not at all below 1
+#define NEAR(d) clamp(10.0 * pxScale / (d) - 1.0, 0.0, 1.0)
 varying vec3 vColor;
 varying float vDist;
 varying vec2 vG;
 #ifdef CANOPY
 varying vec4 vCanopy;
 #endif
-#ifdef POINTS
-varying float vPx;
+#ifdef CHARTS
+// Distant terrain and the globe test their holes by where each point is in the grid the hole belongs to:
+// its own face and grid position (from its direction, as P.fromDir does), unfolded into that grid
+// (toHole: the view face's, where the loaded chunks are; toHole2: the next finer ring's). Measuring both
+// sides of every cut the same way keeps them matched near a cube corner, where unfolding depends on the
+// route taken around the corner (measured in each mesh's own grid, they left black slivers there).
+uniform vec3 faceN[6];
+uniform vec3 faceA[6];
+uniform vec3 faceB[6];
+uniform mat3 toHole[6];
+uniform mat3 toHole2[6];
+uniform float seam2;   // width of the strip along the finer ring's corner wedge that it leaves to coarser terrain
+varying vec3 vP;
 #endif
 void main() {
   // distant terrain leaves a hole where the loaded chunks are and one where the next finer ring is drawn,
-  // and each ring stops at its own edge: discs (centre x, z; radius) in the mesh's own grid, so they line
-  // up exactly with the grids the chunks and rings are laid out on
+  // and each ring stops at its own edge: discs (centre x, z; radius)
+#ifdef CHARTS
+  float best = -2.0;
+  int fi = 0;
+  vec3 fa = faceA[0], fb = faceB[0];
+  for (int i = 0; i < 6; i++) {
+    float c = dot(vP, faceN[i]);
+    if (c > best) { best = c; fi = i; fa = faceA[i]; fb = faceB[i]; }
+  }
+  vec3 g = vec3((vec2(atan(dot(vP, fa) / best), atan(dot(vP, fb) / best)) / 0.7853981633974483 + 1.0) * (FACE_N * 0.5), 1.0);
+  vec2 gh = vec2(1e9), gh2 = vec2(1e9);
+  for (int i = 0; i < 6; i++) if (i == fi) { gh = (toHole[i] * g).xy; gh2 = (toHole2[i] * g).xy; }
+  bool inner = hole2.z > 0.0 && length(gh2 - hole2.xy) < hole2.z;
+  // The finer ring can't join the two faces that meet beyond a cube corner of its grid (it has no samples in
+  // the corner's empty wedge), which leaves a crack about one of its cells wide along that edge and around
+  // the corner itself: this fills it (near a corner of the grid's face along both axes, or past it).
+  bool nu = gh2.x < seam2 || gh2.x > FACE_N - seam2, nv = gh2.y < seam2 || gh2.y > FACE_N - seam2;
+  if (nu && nv) inner = false;
+  bool eye = hole.z > 0.0 && length(gh - hole.xy) < hole.z;
+#else
   bool inner = hole2.z > 0.0 && length(vG - hole2.xy) < hole2.z;
-#ifdef GLOBE
-  // The rings can't join the two faces that meet beyond a cube corner (they have no samples in the corner's
-  // empty wedge), which leaves a crack about one ring cell wide along that edge: the globe fills it.
-  bool ou = vG.x < 0.0 || vG.x > FACE_N, ov = vG.y < 0.0 || vG.y > FACE_N;
-  float seam = 2.0 * max(8.0, length(vG - hole.xy) / 64.0);   // a ring cell is 1/128 to 1/64 of its distance
-  if ((ou && ov) || (ou && min(vG.y, FACE_N - vG.y) < seam) || (ov && min(vG.x, FACE_N - vG.x) < seam)) inner = false;
+  bool eye = hole.z > 0.0 && length(vG - hole.xy) < hole.z;
 #endif
-  if ((hole.z > 0.0 && length(vG - hole.xy) < hole.z) || inner || (outer.z > 0.0 && length(vG - outer.xy) > outer.z)) discard;
+  if (eye || inner || (outer.z > 0.0 && length(vG - outer.xy) > outer.z)) discard;
   vec3 col = vColor;
 #ifdef CANOPY
-  // Tree crowns: where stand-ins are drawn (stand = 1) the canopy colour gives way as they fade in (see
-  // POINTS); elsewhere the ground always takes it. Either way the average colour holds at every distance.
-  float px = CROWN * pxScale / vDist;
-  col = mix(col, vCanopy.rgb, vCanopy.a * (1.0 - stand * clamp(px - 1.0, 0.0, 1.0) * (1.0 - smoothstep(edge.x, edge.y, length(vG)))));
-#endif
-#ifdef POINTS
-  // round once a few pixels across, a little darker underneath
-  vec2 pc = gl_PointCoord - 0.5;
-  if (vPx > 3.0 && dot(pc, pc) > 0.25) discard;
-  if (vPx > 2.0) col *= 1.05 - 0.35 * gl_PointCoord.y;
+  // Tree crowns: where stand-ins are drawn (stand: the share of trees that have one) the canopy colour gives way as they show (see
+  // STAND_VERT: until a 10-block patch is a pixel across); elsewhere the ground always takes it. Either way
+  // the average colour holds at every distance.
+  col = mix(col, vCanopy.rgb, vCanopy.a * (1.0 - stand * NEAR(vDist) * (1.0 - smoothstep(edge.x, edge.y, length(vG)))));
 #endif
   gl_FragColor = vec4(mix(col * tint, fogColor, smoothstep(fogNear, fogFar, vDist)), opacity);
 }`;
-// kind: "morph" for distant-terrain rings, "globe" for the globe, "points" for stand-ins.
-const CROWN = "5.0";   // a typical tree crown's width, for the canopy fade
+// Stand-ins for trees and houses (lod.js, grid.js): instanced, one per tree or house, either as two boxes
+// (BOXES: a trunk and a crown, or walls and a roof; position is a corner of a unit box) or as one point.
+// Each is placed at its foot (base, flat; sph, round) and built out along the grid axes there (frame: grid u,
+// up and grid v as planet-space vectors at the ring's centre, close enough across a ring).
+const STAND_VERT = `
+attribute vec3 base;
+attribute vec3 sph;
+attribute vec3 top;
+attribute vec3 low;
+attribute vec4 a;   // trunk width x, z, height, crown top width (of 255)
+attribute vec4 b;   // crown width x, z, height, random byte
+attribute float c;  // crown bottom
+#ifdef BOXES
+attribute float part;
+attribute float shade;
+#endif
+uniform mat4 flatM;
+uniform mat4 sphM;
+uniform mat3 frame;
+uniform float k;
+uniform float pxScale;
+uniform vec2 edge;
+uniform vec3 hole;
+uniform vec3 hole2;
+uniform vec3 outer;
+varying vec3 vColor;
+varying float vDist;
+varying vec2 vG;
+#define NEAR(d) clamp(10.0 * pxScale / (d) - 1.0, 0.0, 1.0)
+void main() {
+#ifndef BOXES
+  gl_PointSize = 1.0;   // dropped points still need a size, or some drivers draw them huge
+#endif
+  vG = base.xz;
+  // outside this ring's own part (see FRAG): dropped here, before it costs any pixels
+  if ((hole.z > 0.0 && length(vG - hole.xy) < hole.z) || (hole2.z > 0.0 && length(vG - hole2.xy) < hole2.z) || (outer.z > 0.0 && length(vG - outer.xy) > outer.z)) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return;
+  }
+  vec3 w0 = mix((flatM * vec4(base, 1.0)).xyz, (sphM * vec4(sph, 1.0)).xyz, k);
+  float d = length((viewMatrix * vec4(w0, 1.0)).xyz);
+  // Shown while a 10-block patch is a pixel or more (the ground's canopy colour takes over beyond, and
+  // across the outer edge of the last ring with stand-ins); when smaller than a pixel, drawn as one pixel by
+  // a share of them that keeps the covered area right. The random byte decides which ones.
+  float px = max(b.x, b.y) * pxScale / d;
+  float show = NEAR(d) * (1.0 - smoothstep(edge.x, edge.y, length(base.xz))) * min(1.0, px * px);
+  if (b.w >= 256.0 * show) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+#ifdef BOXES
+  bool up = part > 0.5;
+  vec2 wd = up ? b.xy * mix(1.0, a.w / 255.0, position.y) : a.xy;
+  vec3 l = vec3(position.x * wd.x, up ? c + position.y * b.z : position.y * a.z, position.z * wd.y);
+  vColor = (up ? top : low) * shade;
+#else
+  vec3 l = vec3(0.0, c + 0.5 * b.z, 0.0);
+  vColor = top;
+  gl_PointSize = max(px, 1.0);
+#endif
+  vec3 w = mix((flatM * vec4(base + l, 1.0)).xyz, (sphM * vec4(sph + frame * l, 1.0)).xyz, k);
+  vec4 mv = viewMatrix * vec4(w, 1.0);
+  vDist = length(mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}`;
+
+// kind: "morph" for distant-terrain rings, "globe" for the globe, "boxes" or "points" for stand-ins.
 function material(water, kind = null) {
-  const defines = kind === "morph" ? { MORPH: 1, CANOPY: 1, CROWN } : kind === "globe" ? { GLOBE: 1, CANOPY: 1, CROWN, FACE_N: P.N.toFixed(1) }
-    : kind === "points" ? { POINTS: 1 } : {};
+  const defines = kind === "morph" ? { MORPH: 1, CANOPY: 1, CHARTS: 1, FACE_N: P.N.toFixed(1) }
+    : kind === "globe" ? { GLOBE: 1, CANOPY: 1, CHARTS: 1, FACE_N: P.N.toFixed(1) }
+    : kind === "boxes" ? { BOXES: 1 } : {};
+  const stand = kind === "boxes" || kind === "points";
   const m = new THREE.ShaderMaterial({
-    vertexShader: VERT, fragmentShader: FRAG, defines,
+    vertexShader: stand ? STAND_VERT : VERT, fragmentShader: FRAG, defines, side: kind === "boxes" ? THREE.DoubleSide : THREE.FrontSide,
     uniforms: {
       ...shared, flatM: { value: new THREE.Matrix4() }, sphM: { value: new THREE.Matrix4() }, opacity: { value: water ? 0.72 : 1 },
       tint: { value: new THREE.Color(1, 1, 1) }, hole: { value: new THREE.Vector3() }, hole2: { value: new THREE.Vector3() }, outer: { value: new THREE.Vector3() },
       morph: { value: new THREE.Vector2(1e30, 2e30) }, unf: { value: new THREE.Matrix3() }, stand: { value: 0 },
-      edge: { value: new THREE.Vector2(1e30, 2e30) },
+      edge: { value: new THREE.Vector2(1e30, 2e30) }, frame: { value: new THREE.Matrix3() },
+      anchor: { value: new THREE.Vector3() }, seam2: { value: 0 },
+      toHole: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Matrix3()) }, toHole2: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Matrix3()) },
     },
     transparent: water, depthWrite: !water,
   });
@@ -198,6 +278,15 @@ world.init = function (scene, seed) {
 // What the camera sees from: the player's face and grid position, eye layer, eye position on the sphere,
 // the rotation M (rows: render x, y, z axes in planet space) and the blend k. main.js fills it each frame.
 world.view = { f: 0, u: 0, v: 0, eyeY: 0, eye: [0, 0, 0], M: [1, 0, 0, 0, 1, 0, 0, 0, 1], k: 0 };
+
+// Sets m to the map from face g's grid into face f's (the unfold as a 3x3 matrix), or far away if g can't be
+// unfolded next to f (the far side).
+world.unfoldMatrix = function (m, f, g) {
+  const e = unfold(f, g);
+  if (!e) m.set(0, 0, 1e9, 0, 0, 1e9, 0, 0, 1);
+  else m.set(e.A[0], e.A[1], e.t[0], e.A[2], e.A[3], e.t[1], 0, 0, 1);
+  return m;
+};
 
 // The rigid map { A, t } from face g's grid into the view face f's flat grid (see P.EDGE), or null
 // when g is the opposite face (never drawn flat).
@@ -255,7 +344,11 @@ world.loaded = (f, cx, cz) => world.chunks.has(key(f, cx, cz));
 world.chunk = function (f, cx, cz) {
   const k = key(f, cx, cz);
   let c = world.chunks.get(k);
-  if (!c) { c = genChunk(f, cx, cz); world.chunks.set(k, c); }
+  if (!c) {
+    c = genChunk(f, cx, cz);
+    if (world.meshes.has(k)) c.dirty = false;   // generated again after being let go: its mesh is still right
+    world.chunks.set(k, c);
+  }
   return c;
 };
 
@@ -375,10 +468,10 @@ function buildMesh(c) {
   for (const [M, water] of [[S, false], [W, true]]) {
     if (!M.i.length) continue;
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(M.f, 3));
-    g.setAttribute("sphere", new THREE.Float32BufferAttribute(M.s, 3));
-    g.setAttribute("color", new THREE.Float32BufferAttribute(M.c, 3));
-    g.setIndex(M.s.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(M.i, 1) : new THREE.Uint16BufferAttribute(M.i, 1));
+    g.setAttribute("position", new THREE.Float32BufferAttribute(M.f, 3).onUpload(freeArray));
+    g.setAttribute("sphere", new THREE.Float32BufferAttribute(M.s, 3).onUpload(freeArray));
+    g.setAttribute("color", new THREE.Uint8BufferAttribute(M.c.map((x) => Math.round(Math.min(1, x) * 255)), 3, true).onUpload(freeArray));
+    g.setIndex((M.s.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(M.i, 1) : new THREE.Uint16BufferAttribute(M.i, 1)).onUpload(freeArray));
     const m = new THREE.Mesh(g, material(water));
     m.frustumCulled = false;   // placement happens in the shader
     if (water) m.renderOrder = 1;
@@ -388,6 +481,9 @@ function buildMesh(c) {
   world.meshCount++;
   return group;
 }
+
+// A chunk mesh's arrays are only needed until they are on the GPU (a mesh is rebuilt from blocks if it changes).
+function freeArray() { this.array = null; }
 
 function dropMesh(k) {
   const g = world.meshes.get(k);
@@ -429,7 +525,7 @@ world.update = function (budgetMs = 6) {
   for (const e of list) keep.add(e.k);
   for (const e of list) {
     const c = world.chunks.get(e.k);
-    if (world.meshes.has(e.k) && c && !c.dirty) continue;
+    if (world.meshes.has(e.k) && !(c && c.dirty)) continue;   // meshed (its data may have been let go)
     if (performance.now() - t0 > budgetMs && world.meshes.has(e.k)) continue;
     if (performance.now() - t0 > budgetMs) break;
     const ch = world.chunk(e.f, e.cx, e.cz);
@@ -440,16 +536,38 @@ world.update = function (budgetMs = 6) {
     world.scene.add(g);
   }
   for (const k of [...world.meshes.keys()]) if (!keep.has(k)) dropMesh(k);
-  // forget unedited chunk data well outside the view
-  if (world.chunks.size > Math.max(64, list.length) * 3) {
-    for (const [k, c] of world.chunks) if (!keep.has(k) && !c.edited) world.chunks.delete(k);
-  }
+  forget(list);
   for (const g of world.meshes.values()) place(g);
   // how far out every wanted chunk has a mesh (distant terrain fills in beyond that while chunks load)
   const gap = list.find((e) => !world.meshes.has(e.k));
   world.covered = !world.chunksOn ? 0 : gap ? Math.max(0, Math.sqrt(gap.d2) - 1) * CS : world.viewDist * CS;
   return { wanted: list.length, meshed: world.meshes.size };
 };
+
+// Block data is kept only where it is needed: near the player (for walking, building and sheep), for chunks
+// still to be meshed and their neighbours (meshing reads one column past each side), and wherever the player
+// has changed something. Further out, once a chunk and its neighbours have meshes, only the mesh is kept,
+// which is what lets the view reach far. Runs every so often, once enough data has piled up.
+const KEEP = 8;   // chunks from the player whose data always stays
+let lastForget = 0;
+function forget(list) {
+  if (world.chunks.size < lastForget + 256 && list.length) return;
+  const want = new Map();
+  for (const e of list) want.set(e.k, e);
+  const g = { f: 0, u: 0, v: 0 }, pending = (c, dx, dz) => {
+    world.cell(c.f, c.cx * CS + dx * CS, c.cz * CS + dz * CS, g);
+    const k = key(g.f, g.u >> 4, g.v >> 4);
+    return want.has(k) && !world.meshes.has(k);
+  };
+  for (const [k, c] of world.chunks) {
+    if (c.edited) continue;
+    const e = want.get(k);
+    if (e && (e.d2 <= KEEP * KEEP || !world.meshes.has(k) || c.dirty)) continue;
+    if (e && (pending(c, 1, 0) || pending(c, -1, 0) || pending(c, 0, 1) || pending(c, 0, -1))) continue;
+    world.chunks.delete(k);
+  }
+  lastForget = world.chunks.size;
+}
 
 // Sets a chunk's two placements: flat (chunk-local grid -> unfolded view grid -> render space) and
 // round (anchor-relative sphere -> rotated by M, relative to the eye).

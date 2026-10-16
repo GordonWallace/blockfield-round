@@ -30,7 +30,7 @@ function resize() {
   map.camera.aspect = camera.aspect; map.camera.updateProjectionMatrix();
 }
 
-const VIEW_MAX = 24;   // chunks; also the starting view distance
+const VIEW_MAX = 32;   // chunks; also the starting view distance
 function setView(v) { world.viewDist = v; }
 // Real chunks are loaded only while a block straight below is at least about a pixel across, and never more
 // than this many blocks above the ground, however big the screen (so a large display doesn't load chunks
@@ -165,17 +165,19 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => { player.keys[e.code] = false; });
 addEventListener("blur", () => { player.keys = {}; });
 document.addEventListener("mousemove", (e) => {
-  if (document.pointerLockElement === renderer.domElement) player.look(e.movementX, e.movementY);
-  else if (map.open && map.drag) map.rotate(e.movementX, e.movementY);
+  if (map.open && map.drag) map.rotate(e.movementX, e.movementY);
+  else if (offPlanet) { if (drag.on) turnPlanet(e.movementX, e.movementY); }
+  else if (document.pointerLockElement === renderer.domElement) player.look(e.movementX, e.movementY);
 });
 renderer.domElement.addEventListener("mousedown", (e) => {
   if (!started) return;
   if (map.open) { map.drag = true; map.moved = 0; return; }
+  if (offPlanet) { drag.on = true; return; }
   if (document.pointerLockElement !== renderer.domElement) { renderer.domElement.requestPointerLock(); return; }
   if (e.button === 0) player.breakBlock();
   else player.placeBlock();
 });
-addEventListener("mouseup", (e) => { if (map.open && map.drag) { map.drag = false; if (map.moved < 4) map.click(e); } });
+addEventListener("mouseup", (e) => { drag.on = false; if (map.open && map.drag) { map.drag = false; if (map.moved < 4) map.click(e); } });
 renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
 renderer.domElement.addEventListener("wheel", (e) => { if (map.open) map.zoom(e.deltaY); });
 
@@ -362,6 +364,54 @@ map.click = (e) => {
   toggleMap();
 };
 
+// ---- off-planet mode ----
+// Above layer 20,000 the camera faces the planet's centre with north up, the planet's axis shows as a thin
+// red line through the poles, and dragging with the mouse turns the planet under you (Google Earth style,
+// keeping your height). Below it the mouse looks around as usual. A little below the line is allowed
+// before switching back, so hovering at 20,000 doesn't flicker between the two.
+const OFF_PLANET = 20000;
+let offPlanet = false;
+const axis = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xff2a2a, fog: false }));
+axis.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+axis.frustumCulled = false; axis.visible = false;
+scene.add(axis);
+const drag = { on: false };
+function northAt(d) {
+  const n = [-d[0] * d[1], 1 - d[1] * d[1], -d[2] * d[1]], l = Math.hypot(...n);
+  return l > 1e-4 ? [n[0] / l, n[1] / l, n[2] / l] : null;
+}
+function offPlanetMode() {
+  const was = offPlanet;
+  offPlanet = player.y > (offPlanet ? OFF_PLANET * 0.97 : OFF_PLANET);
+  if (offPlanet && !was && document.pointerLockElement) document.exitPointerLock();
+  if (!offPlanet && was) { drag.on = false; player.pitch = -1.5; }   // carry on looking down at the ground
+  axis.visible = offPlanet;
+  if (!offPlanet) return;
+  const n = northAt(player.up);
+  if (n) player.setHeading(n);
+}
+function drawAxis() {
+  const M = world.view.M, e = world.view.eye, a = axis.geometry.attributes.position;
+  [1.25, -1.25].forEach((s, i) => {
+    const dx = -e[0], dy = s * P.R - e[1], dz = -e[2];
+    a.array[i * 3] = M[0] * dx + M[1] * dy + M[2] * dz;
+    a.array[i * 3 + 1] = M[3] * dx + M[4] * dy + M[5] * dz;
+    a.array[i * 3 + 2] = M[6] * dx + M[7] * dy + M[8] * dz;
+  });
+  a.needsUpdate = true;
+}
+// Drags by (dx, dy) pixels: the ground under the middle of the screen follows the mouse.
+function turnPlanet(dx, dy) {
+  const d = P.dir(player.f, player.u, player.v, [0, 0, 0]), h = Math.max(1, player.y - P.SEA);
+  let lat = Math.asin(d[1]), lon = Math.atan2(d[0], d[2]);
+  const a = Math.min(h, P.R + h) / (world.shared.pxScale.value * P.R);
+  lon -= dx * a / Math.max(0.05, Math.cos(lat));
+  lat = Math.max(-1.55, Math.min(1.55, lat + dy * a));
+  const g = P.fromDir(Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon), {});
+  player.place(g.f, g.u, g.v, player.y);
+  player.flying = true;
+}
+
 // ---- loop ----
 let last = performance.now(), fpsT = 0, frames = 0, fps = 0;
 function frame(now) {
@@ -377,6 +427,7 @@ function frame(now) {
     return;
   }
   if (!tp.open) player.update(dt);
+  offPlanetMode();
   setupView();
   mobs.update(dt, player);
   const st = world.update();
@@ -387,8 +438,14 @@ function frame(now) {
   const fh = world.dirToRender(p.f, p.u, p.v, p.y, p.heading), fu = world.dirToRender(p.f, p.u, p.v, p.y, p.up);
   const lh = Math.hypot(...fh), lu = Math.hypot(...fu);
   camera.position.set(0, 0, 0);
-  camera.up.set(fu[0] / lu, fu[1] / lu, fu[2] / lu);
-  camera.lookAt(fh[0] / lh * cp + fu[0] / lu * sp, fh[1] / lh * cp + fu[1] / lu * sp, fh[2] / lh * cp + fu[2] / lu * sp);
+  if (offPlanet) {   // straight down at the centre, north at the top of the screen
+    camera.up.set(fh[0] / lh, fh[1] / lh, fh[2] / lh);
+    camera.lookAt(-fu[0], -fu[1], -fu[2]);
+    drawAxis();
+  } else {
+    camera.up.set(fu[0] / lu, fu[1] / lu, fu[2] / lu);
+    camera.lookAt(fh[0] / lh * cp + fu[0] / lu * sp, fh[1] / lh * cp + fu[1] / lu * sp, fh[2] / lh * cp + fu[2] / lu * sp);
+  }
   drawOutline();
   renderer.render(scene, camera);
   if (fpsT === 0) hud(st);
@@ -413,7 +470,7 @@ function villageLine() {
 function hud(st) {
   const d = P.dir(player.f, player.u, player.v, [0, 0, 0]);
   const lat = Math.asin(d[1]) * 180 / Math.PI, lon = Math.atan2(d[0], d[2]) * 180 / Math.PI;
-  const mode = player.flying ? (player.fast ? "fast fly" : "fly") : "walk", k = world.view.k;
+  const mode = (player.flying ? (player.fast ? "fast fly" : "fly") : "walk") + (offPlanet ? " · off-planet (drag to turn the planet)" : ""), k = world.view.k;
   const view = (k <= 0 ? "flat" : k >= 1 ? "round" : `blending ${Math.round(k * 100)}% round`) + (cornerRound ? "" : " (corner gaps)") + (forceK === 1 ? " (R: true sphere)" : "");
   const cs = world.terrain.surface(player.f, Math.floor(player.u), Math.floor(player.v), d);
   const climate = `${BF.climate.NAMES[cs.biome]}, ${BF.climate.BANDS[cs.band]} band (climate latitude ${Math.round(cs.elat)}°)` +
@@ -433,5 +490,6 @@ resize();
 setView(VIEW_MAX);
 requestAnimationFrame(frame);
 BF.main = { start, goTo, goGrid, goCorner, teleport, setView, map, renderer, camera, scene, CORNERS, cornerGrid, ALT0, ALT1,
+  turnPlanet, offPlanet: () => offPlanet,
   forceBlend: (k) => { forceK = k; }, cornerMode: (round) => { cornerRound = round; } };
 })();

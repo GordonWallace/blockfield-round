@@ -7,8 +7,9 @@ const fs = require("fs");
 (async () => {
   const [url, out, three] = process.argv.slice(2);
   const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  page.setDefaultTimeout(180000);
+  // small, with a short chunk view: software WebGL (swiftshader) takes seconds a frame on big views
+  const page = await browser.newPage({ viewport: { width: 800, height: 450 } });
+  page.setDefaultTimeout(400000);
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
@@ -17,6 +18,7 @@ const fs = require("fs");
   await page.fill("#seed", process.env.SEED || "1");
   await page.click("#play");
   const ev = (f, a) => page.evaluate(f, a);
+  await ev(() => BF.main.setView(12));
   await page.waitForTimeout(6000);
   // a big forest (BIOME=name picks another biome): a spot whose surroundings are mostly that biome
   const spot = await ev((name) => {
@@ -41,7 +43,7 @@ const fs = require("fs");
   }));
   const settle = async () => {
     await page.waitForTimeout(3000);
-    for (let t = 0; t < 60000 && (await ev(() => BF.sampler.pending() + BF.lod.levels.filter((L) => L.building).length)); t += 1000) await page.waitForTimeout(1000);
+    for (let t = 0; t < 240000 && (await ev(() => BF.sampler.pending() + BF.lod.levels.filter((L) => L.building).length)); t += 1000) await page.waitForTimeout(1000);
     await page.waitForTimeout(2500);
   };
   const views = process.env.MOVE_ONLY ? [] : [["low", 60, -0.12], ["chunks-on", 380, -0.45], ["chunks-off", 560, -0.45], ["high", 2000, -0.8], ["high-down", 2000, -1.5], ["planet", 20000, -1.5], ["planet-far", 180000, -1.5]];

@@ -23,8 +23,11 @@ Run it with `./run.sh` and open http://localhost:8000.
   straight walk stays straight (`node tools/check-edges.js` checks all 24 edges).
 - **Corners.** Only three faces meet at a cube corner (270 degrees instead of 360), so flat drawing can't
   close up there. Within about a kilometre of each of the 8 corners the view switches to the true round
-  drawing instead (blocks there are skewed by up to 30 degrees), and terrain keeps every corner open ocean
-  (land fades out between 4 and 1.5 km), so all you see is water. Press C to show the alternative, a
+  drawing instead (blocks there are skewed by up to 30 degrees), and terrain keeps every corner open ocean,
+  so all you see is water. Each seed's continents are turned (one rotation, picked from a few hundred tries)
+  so that every corner has 40 km of unbroken sea running out from it along some heading, which rules out a
+  lake; a corner still short of that gets a wandering gulf, 3 to 6 km wide, out to it, and any island right
+  by a corner fades out between 4 and 1.5 km. Press C to show the alternative, a
   90-degree wedge left empty, visible only within view distance of the corner point. Press P and pick a
   corner to visit one; B tints each face so the three are easy to tell apart.
 - **Terrain.** Heights and coasts are 3D noise sampled at each column's direction, so continents run
@@ -53,25 +56,35 @@ Run it with `./run.sh` and open http://localhost:8000.
   of its inflows together, along the lowest way out of the lake's valley. `node tools/river-check.js`
   proves the network and the generated blocks never go uphill (see the file for exactly what it checks).
 - **Distant terrain** (`js/lod.js`, `js/globe.js`). Beyond the loaded chunks, seven rings of height-field
-  meshes show the land at 4, 8, 16 and on up to 256 blocks per cell, out to 33 km, with the same colours as the
-  blocks. Each ring morphs into the next across its outer
+  meshes show the land at 4, 8, 16 and on up to 256 blocks per cell, out to 65 km, with the same colours as the
+  blocks, at every height (so the horizon never pops in as you climb). Each ring reaches 256 cells from its
+  centre, so a cell is 1/128 to 1/256 of its distance: a few pixels across on any screen, the same detail near
+  and far. Each ring morphs into the next across its outer
   part, so detail fades with distance instead of stepping, and each is drawn as a disc around its own centre
   minus the next finer ring, so a ring still being rebuilt leaves the coarser one showing, never a gap. Rivers
-  are drawn out there as ribbons along their curves, at least 6 blocks wide. Terrain is sampled by background
+  are drawn out there as ribbons along their curves, at least 6 blocks wide, ending where they meet the sea. Terrain is sampled by background
   workers (`js/grid.js`, `js/lodworker.js`), reusing the part of a ring that is still inside its new position.
   A ring is hidden once its cells are about two pixels across, so out at planet scale only the globe is left:
   the whole planet at 256 blocks per cell (the coarsest ring's detail), built in tiles nearest you first from
-  the moment a world starts.
-- **Trees and houses from afar.** The four finest rings (out to about 4 km) carry stand-ins: a dot for each
-  tree and village house, from the same random numbers as the real trees and the villages' own layouts, drawn
-  at their true size while that is at least a pixel or two. Smaller than that they thin out and the ground
-  takes the forest's average leaf colour, which the coarser rings and the globe always show, so a forest
-  keeps its colour at every distance and height, with no line where the trees stop.
+  the moment a world starts. The cuts between rings, and between the rings and the globe, are measured in the
+  grid of whichever piece is cut out, at each point's real face and grid position (worked out per pixel from
+  its direction): near a cube corner, unfolding a grid depends on which way round the corner you go, and
+  measuring in each mesh's own grid left black slivers there.
+- **Trees and houses from afar.** The six finest rings carry stand-ins, one for each tree and village house,
+  from the same random numbers as the real trees and the villages' own layouts. Within 1 km each is two
+  boxes at its real size and colours, shaped by its kind (an oak's trunk and crown, a spruce's tall narrow
+  crown, a bush with no trunk, a house's walls and roof); further out each is a square dot. From 2 km out the
+  rings keep one tree in 4, 16, 64 and 256, and the ground's canopy colour makes up the rest. Stand-ins fade out
+  where a 10-block patch (about a tree) drops from 2 pixels to 1, not at a block, so no line where they stop
+  follows you around; past that the ground takes the forest's average leaf colour, which the coarser rings
+  and the globe always show, so a forest keeps its colour at every distance and height. None are made more
+  than about 14 km from the player, where they could never show (a 10-block patch is under a pixel there even on a 4K screen).
 - **Chunks only where blocks show.** Real chunks (and sheep) are loaded only while a block straight below is
   at least about a pixel across (around 500 to 900 blocks up, depending on the screen), and never more than
   1,500 blocks above the ground (`world.chunkCeiling` in `js/main.js`, or `BF.world.chunkCeiling` in the
   console). Above that, the whole view is distant terrain and stand-ins at the same detail everywhere, and
-  nothing loads as you move.
+  nothing loads as you move. The view is 32 chunks (512 blocks): a far chunk keeps only its mesh (its block
+  data is dropped and regenerated if needed), so memory stays around 250 MB.
 - **Precision.** Each chunk mesh is built relative to its own anchor and placed relative to the camera every
   frame, so float32 rendering stays exact anywhere on the planet.
 
@@ -89,6 +102,9 @@ Run it with `./run.sh` and open http://localhost:8000.
   At a corner the wedge closes and the three faces meet as rhombuses, as they really are.
 - **Getting up there.** Fast flight (G) speeds up with height, so holding Space reaches orbit in seconds.
   The teleport panel has buttons for 1,000, 10,000 and 300,000 blocks up.
+- **Off-planet mode.** Above layer 20,000 the camera faces the planet's centre with north up, a thin red line
+  shows the planet's axis through the poles, and dragging with the mouse turns the planet under you (Google
+  Earth style, keeping your height). Below 19,400 the mouse looks around again, starting from straight down.
 
 ## Villages
 
@@ -117,7 +133,7 @@ to travel. P opens the teleport panel (also /): type `face 0 81920 81920 [layer]
 and longitude, N/S/E/W allowed), `corner 1`-`corner 8` or `up 5000`, or press a corner or height button.
 B tints each cube face, C switches corners between the round view and an empty wedge, and R draws the
 true sphere everywhere, to compare (for example, rows of blocks bending where they cross a face edge). T jumps to random land, V goes to the nearest village, K spawns more sheep, L holds
-wheat, and + / - change the view distance (it starts at the largest, 24 chunks). Left click breaks a block and right click places planks.
+wheat, and + / - change the view distance (it starts at the largest, 32 chunks). Above layer 20,000, drag to turn the planet. Left click breaks a block and right click places planks.
 
 ## Files
 
