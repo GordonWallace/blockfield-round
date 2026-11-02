@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blockfield Sphere</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 14px/1.4 system-ui, sans-serif; color: #fff; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 10px; top: 8px; white-space: pre; text-shadow: 1px 1px 0 #000; font: 13px/1.5 ui-monospace, monospace; pointer-events: none; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; pointer-events: none; }
+  #cross:before, #cross:after { content: ""; position: absolute; background: #fff; mix-blend-mode: difference; }
+  #cross:before { left: 7px; top: 0; width: 2px; height: 16px; }
+  #cross:after { top: 7px; left: 0; height: 2px; width: 16px; }
+  #title { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(#1d3557, #05070d); }
+  #title .box { max-width: 520px; padding: 24px; }
+  #title h1 { margin: 0 0 4px; font-size: 40px; }
+  #title p { color: #c8d3e0; }
+  #title input { font: inherit; padding: 6px 8px; width: 120px; }
+  #title button { font: inherit; padding: 6px 18px; margin-left: 8px; cursor: pointer; }
+  #title kbd { background: #26364d; border-radius: 3px; padding: 0 4px; }
+  #tp { display: none; position: fixed; left: 50%; top: 18%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); box-sizing: border-box;
+        background: rgba(10, 16, 28, 0.92); border: 1px solid #3a4c68; border-radius: 8px; padding: 16px 18px; }
+  #tp h2 { margin: 0 0 8px; font-size: 18px; }
+  #tp input { font: 15px ui-monospace, monospace; padding: 6px 8px; width: calc(100% - 70px); box-sizing: border-box; }
+  #tp button { font: inherit; padding: 4px 12px; margin: 4px 6px 0 0; cursor: pointer; }
+  #tp .row { margin-top: 10px; color: #c8d3e0; }
+  #tp .hint { color: #8fa3bd; font-size: 13px; margin-top: 8px; }
+  #tpmsg { color: #ffd27a; min-height: 1.4em; margin-top: 6px; font-size: 13px; }
+  #maphelp { display: none; position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #c8d3e0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="cross"></div>
+<div id="title"><div class="box">
+  <h1>Blockfield Sphere</h1>
+  <p>Prototype: a true sphere 655,360 blocks around. Blocks sit in rows of latitude, one block deep each; every row
+  has as many columns as fit, so a block is within 3% of square everywhere except right by the poles. You move in real
+  space, so a trip takes exactly as long as the distance on a real sphere. The HUD shows where you are as latitude and
+  longitude, as a block (row, column, layer) and as x, y, z in space.</p>
+  <p><label>Seed <input id="seed" value="1"></label><button id="play">Play</button></p>
+  <p><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Ctrl</kbd> sprint · <kbd>F</kbd> fly (<kbd>Space</kbd>/<kbd>Shift</kbd> up/down) · <kbd>G</kbd> fast fly ·
+     <kbd>P</kbd> go to a latitude and longitude · <kbd>M</kbd> mark here (the HUD then compares the distance walked with the straight line) ·
+     <kbd>T</kbd> random land · <kbd>+</kbd>/<kbd>-</kbd> view distance · left click break · right click place</p>
+  <p><a href="index.html" style="color:#9cc4ff">The cube-sphere prototype</a></p>
+</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/noise.js"></script>
+<script src="js/planet.js"></script>
+<script src="js/climate.js"></script>
+<script src="js/rivers.js"></script>
+<script src="js/terrain.js"></script>
+<script src="js/sphere.js"></script>
+<script src="js/sphere-world.js"></script>
+</body>
+</html>
