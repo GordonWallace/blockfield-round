@@ -6,6 +6,13 @@ It has one mob, Blockfield's sheep. There are no textures, saving or inventory y
 
 Run it with `./run.sh` and open http://localhost:8000.
 
+**A true sphere** is at http://localhost:8000/sphere.html: the same planet as rows of latitude, each cut
+into columns, so every block is within 3% of square and a trip takes exactly as long as on a real sphere.
+Every point can be given as latitude and longitude, as a block, or as x, y, z in space around the planet's
+centre. The method, the numbers and what a port into Blockfield would involve are in
+[docs/true-sphere.md](docs/true-sphere.md). WASD, Space, Ctrl, F fly, G fast fly, P go to a latitude and
+longitude, M mark a spot (the HUD compares the distance walked with the straight line), + / - view distance.
+
 ## The planet
 
 - **Cube-sphere.** Six square faces, each 163,840 x 163,840 block columns, are projected onto a sphere.
@@ -165,3 +172,8 @@ wheat, and + / - change the view distance (it starts at the largest, 32 chunks).
 | `test/distant.js` | Headless run: distant terrain from 2,500 blocks up, fast flight, a river from above, planet scale |
 | `test/standins.js` | Headless run: a forest from 60 blocks up to planet scale, either side of the chunk cut-off; checks stand-ins reused by a moved ring match a fresh build |
 | `test/lakes.js` | Headless run: the lakes with the most rivers flowing in (HIGH=1: the biggest highland lakes), from 1,800 and 4,000 blocks up |
+| `js/sphere.js` | True sphere: latitude rows, bands of columns, conversions between lat/lon, blocks and x, y, z |
+| `js/sphere-path.js` | True sphere: A* over blocks with real-distance costs, pulled tight along great circles |
+| `js/sphere-world.js` | True sphere viewer: chunks, meshing, movement in real space, middle-distance disc, globe, HUD |
+| `sphere.html` | The true sphere page |
+| `tools/sphere-check.js` | `node tools/sphere-check.js`: block sizes, conversions, straight walks, paths, and the cube-sphere comparison |
