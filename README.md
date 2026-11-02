@@ -177,5 +177,6 @@ wheat, and + / - change the view distance (it starts at the largest, 32 chunks).
 | `js/sphere-path.js` | True sphere: A* over blocks with real-distance costs, pulled tight along great circles |
 | `js/sphere-world.js` | True sphere viewer: chunks, meshing, movement in real space, middle-distance disc, globe, HUD |
 | `js/sphere-mobs.js` | True sphere sheep: standing on blocks, wandering and following with A* over the sphere grid |
+| `js/sphere-atlas.js` | True sphere: band atlas coordinates (the design proposed for porting Blockfield), checked by tools/sphere-check.js |
 | `sphere.html` | The true sphere page |
 | `tools/sphere-check.js` | `node tools/sphere-check.js`: block sizes, conversions, straight walks, paths, and the cube-sphere comparison |

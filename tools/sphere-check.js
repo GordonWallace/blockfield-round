@@ -6,7 +6,7 @@
 // Usage: node tools/sphere-check.js [pairs, default 2000]
 const path = require("path");
 global.window = global;
-for (const f of ["noise", "planet", "sphere", "sphere-path"]) require(path.join(__dirname, "..", "js", f + ".js"));
+for (const f of ["noise", "planet", "sphere", "sphere-path", "sphere-atlas"]) require(path.join(__dirname, "..", "js", f + ".js"));
 const S = BF.sphere, P = BF.planet, SP = BF.spherePath, DEG = 180 / Math.PI;
 const PAIRS = +(process.argv[2] || 2000);
 const n = BF.makeNoise(7);
@@ -128,6 +128,55 @@ console.log(`2: ${TRIPS} straight walks of 200-3,200 blocks: the walk ends a gre
     lines.push(`   round a 200-block wall: straight ${S.distance(P0.lat, P0.lon, P1.lat, P1.lon).toFixed(1)}, shortest way round via the wall's end ${best.toFixed(1)}, pulled-tight path ${lt.toFixed(1)}`);
   }
   console.log(`2 (paths): A* over blocks, then pulled tight along great circles; on open ground within ${(worst * 100).toExponential(1)}% of the great circle\n${lines.join("\n")}`);
+}
+
+// ---- band atlas coordinates (the r16-s01 design for the Blockfield port) ----
+{
+  const A = BF.sphereAtlas;
+  let bad = 0, worst = 0;
+  for (let i = 0; i < PAIRS; i++) {
+    const [lat, lon] = randLL(i, 60);
+    if (Math.abs(lat) > 1.55) continue;
+    const p = A.atlasOfLatLon(lat, lon), q = A.canon(p.x, p.z), g = A.latLonAt(p.x, p.z);
+    if (Math.abs(q.x - p.x) > 1e-6) bad++;                                 // canonical points are fixed
+    worst = Math.max(worst, S.distance(lat, lon, g.lat, g.lon));            // lat/lon -> atlas -> lat/lon
+    const b = A.bandOfX(p.x), B = A.bands[b], c = p.x - B.X - B.n;
+    for (const k of [1, -1]) { const e = A.canon(p.x + k * B.n, p.z); if (Math.abs(e.x - p.x) > 1e-6) bad++; }   // a lap east or west
+    // across the seam: a margin cell M/2 rows past the band shows the same block as walking there on the grid
+    const zc = Math.floor(p.z), cc = Math.floor(c);
+    for (const dz of [B.z0 - 1 - zc, B.z1 - zc]) {
+      if (zc + dz < 0 || zc + dz >= S.ROWS) continue;
+      const m = A.canonCell(B.X + B.n + cc, zc + dz), row = A.rowOf(zc + dz), n2 = S.cols(row);
+      const want = Math.floor((cc + 0.5) * n2 / B.n);
+      if (m.c !== want) bad++;
+    }
+  }
+  check(bad === 0, `band atlas: ${bad} canon mismatches`);
+  check(worst < 1e-6, `band atlas round trip ${worst}`);
+  // walking straight in atlas coordinates: real speed through toGridVel, heading carried with carryYaw,
+  // recanonicalised across seams; it should end a great-circle distance from the start equal to the distance walked
+  let ww = 0, wn = 0;
+  for (let i = 0; i < 60; i++) {
+    const [lat, lon] = randLL(i, 70);
+    if (Math.abs(lat) > 1.3) continue;
+    const yaw0 = n.hash(i, 71) * 2 * Math.PI, D = 30000, step = 2;
+    for (const carry of [true, false]) {
+      let p = A.atlasOfLatLon(lat, lon), yaw = yaw0;
+      const a = A.latLonAt(p.x, p.z);
+      for (let s = 0; s < D; s += step) {
+        const v = A.toGridVel(p.x, p.z, -Math.sin(yaw) * step, -Math.cos(yaw) * step);
+        // move half, turn, move half (midpoint rule)
+        const mid = { x: p.x + v.x / 2, z: p.z + v.z / 2 };
+        if (carry) yaw = A.carryYaw(mid.x, mid.z, v.x, yaw);
+        const v2 = A.toGridVel(mid.x, mid.z, -Math.sin(yaw) * step, -Math.cos(yaw) * step);
+        p = A.canon(p.x + v2.x, p.z + v2.z);
+      }
+      const b = A.latLonAt(p.x, p.z), err = Math.abs(S.distance(a.lat, a.lon, b.lat, b.lon) / D - 1);
+      if (carry) ww = Math.max(ww, err); else wn = Math.max(wn, err);
+    }
+  }
+  check(ww < 0.0002, `atlas straight walk off by ${ww}`);
+  console.log(`band atlas (r16-s01): ${A.bands.length} bands over x 0-${(A.SPAN / 1e6).toFixed(1)} million; canon fixes canonical points, wraps a lap east or west, and across a seam matches the grid's neighbour rule; lat/lon round trip ${worst.toExponential(1)} blocks; a 30,000-block straight walk in atlas coordinates ends ${(ww * 100).toExponential(1)}% from the great-circle distance (${(wn * 100).toFixed(2)}% without carryYaw)`);
 }
 
 // ---- comparison: the cube-sphere moves in grid blocks, which are 0.71-1.0 of a real block ----

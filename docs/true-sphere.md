@@ -118,7 +118,8 @@ is rescaled (c × n2 / n) and nothing turns.
   without changing how mobs and villagers store their positions.
 - **Turn the heading as things move.** A straight walk (a great circle) turns in grid terms by sin(latitude)
   times the change in longitude, because meridians converge. That one correction keeps the player and mobs
-  walking straight.
+  walking straight: `js/sphere-atlas.js` walks 30,000 blocks in grid coordinates and ends within 1e-7% of the
+  great-circle distance with it, and 4.2% off without it.
 - **Cross seams with a rescale.** Neighbour lookups across a seam rescale the column (S.neighbour,
   S.overlap). That replaces the face-edge unfold tables, the rotations and the corner special cases.
 - **Keep villages and structures inside one band**, as the cube-sphere keeps them inside one face.
@@ -136,6 +137,7 @@ unfolding) as well as add it, but that estimate is not measured.
 - `js/sphere.js`: the grid, the bands and all the conversions.
 - `js/sphere-path.js`: A* and path tightening.
 - `js/sphere-mobs.js`: sheep.
+- `js/sphere-atlas.js`: band atlas coordinates, the design proposed for porting Blockfield (each band its own region of a flat x/z plane, wrapping east-west, rescaled across seams), checked by `tools/sphere-check.js`.
 - `js/sphere-world.js`: chunks, meshing, physics, the middle-distance disc, the globe and the HUD.
 - `sphere.html`: the page.
 - `tools/sphere-check.js`: the checks quoted above.
