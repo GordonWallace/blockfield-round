@@ -169,6 +169,36 @@ function buildMesh(ch) {
     }
   };
   const exposed = (b) => b === B.AIR || (b === B.WATER) || b === B.ICE;
+  // A block's top at layer y. In a band's first or last row its edge on the seam also gets a vertex at each of the
+  // other band's column boundaries along it, so the neighbours' edges meet vertex to vertex (no T-junction
+  // cracks); such a top is drawn as a fan round its centre.
+  const sb = r0 === S.band(r0).k0 * CS, nb = r0 + CS === S.band(r0).k1 * CS;
+  const splits = (row, c, rOther) => {
+    if (rOther < 0 || rOther >= S.ROWS) return [];
+    const n2 = S.cols(rOther), out = [];
+    if (n2 === n) return out;
+    for (let k = Math.floor(c * n2 / n) + 1; k * n / n2 < c + 1 - 1e-9; k++) if (k * n / n2 > c + 1e-9) out.push(k * n / n2);
+    return out;
+  };
+  const fanC = [0, 0, 0], fanA = [0, 0, 0], fanB = [0, 0, 0], fanQ = [fanC, fanA, fanB];
+  const top = (r, c, y, rgbc) => {
+    const S0 = sb && r === r0 ? splits(r, c, r - 1) : [], N0 = nb && r === r0 + CS - 1 ? splits(r + 1, c, r + 1) : [];
+    if (!S0.length && !N0.length) {
+      corner(r, c, n, y, anchor, q[0]); corner(r, c + 1, n, y, anchor, q[1]);
+      corner(r + 1, c + 1, n, y, anchor, q[2]); corner(r + 1, c, n, y, anchor, q[3]);
+      quad(q, rgbc, 1);
+      return;
+    }
+    // outline, counter-clockwise as the quads are: south edge west to east, then north edge east to west
+    const ring = [[r, c], ...S0.map((t) => [r, t]), [r, c + 1], [r + 1, c + 1], ...N0.slice().reverse().map((t) => [r + 1, t]), [r + 1, c]];
+    corner(r + 0.5, c + 0.5, n, y, anchor, fanC);
+    for (let i = 0; i < ring.length; i++) {
+      const p0 = ring[i], p1 = ring[(i + 1) % ring.length];
+      corner(p0[0], p0[1], n, y, anchor, fanA); corner(p1[0], p1[1], n, y, anchor, fanB);
+      for (const v of fanQ) { pos.push(v[0], v[1], v[2]); col.push(rgbc[0], rgbc[1], rgbc[2]); }
+      uv.push(0.5, 0.5, 0, 0, 1, 0);
+    }
+  };
   for (let i = 0; i < CS; i++) for (let j = 0; j < CS; j++) {
     const r = r0 + i, c = c0 + j, base = i * CS + j;
     const hTop = Math.min(H - 1, Math.max(ch.top[base], SEA) + 1);
@@ -181,19 +211,11 @@ function buildMesh(ch) {
       const topCol = (b === B.GRASS ? GRASS[ch.biome[base]] : pal[0]).map((x) => x * jit);
       if (b === B.WATER || b === B.ICE) {
         // water: only its surface
-        if (get(r, c, y + 1) === B.AIR) {
-          corner(r, c, n, y + 0.88, anchor, q[0]); corner(r, c + 1, n, y + 0.88, anchor, q[1]);
-          corner(r + 1, c + 1, n, y + 0.88, anchor, q[2]); corner(r + 1, c, n, y + 0.88, anchor, q[3]);
-          quad(q, pal[0], 1);
-        }
+        if (get(r, c, y + 1) === B.AIR) top(r, c, y + 0.88, pal[0]);
         continue;
       }
       // top
-      if (exposed(get(r, c, y + 1))) {
-        corner(r, c, n, y + 1, anchor, q[0]); corner(r, c + 1, n, y + 1, anchor, q[1]);
-        corner(r + 1, c + 1, n, y + 1, anchor, q[2]); corner(r + 1, c, n, y + 1, anchor, q[3]);
-        quad(q, topCol, 1);
-      }
+      if (exposed(get(r, c, y + 1))) top(r, c, y + 1, topCol);
       // east and west: same row
       for (const dc of [1, -1]) {
         if (!exposed(get(r, c + dc, y))) continue;
@@ -206,14 +228,26 @@ function buildMesh(ch) {
       for (const dr of [1, -1]) {
         const r2 = r + dr;
         if (r2 < 0 || r2 >= S.ROWS) continue;
+        const e = dr > 0 ? r + 1 : r, n2 = S.cols(r2);
+        if (n2 === n) {
+          if (!exposed(get(r2, c, y))) continue;
+          corner(e, c, n, y, anchor, q[0]); corner(e, c + 1, n, y, anchor, q[1]);
+          corner(e, c + 1, n, y + 1, anchor, q[2]); corner(e, c, n, y + 1, anchor, q[3]);
+          quad(q, pal[1], 0.85 * jit);
+          continue;
+        }
+        // across a band seam the face borders one or two columns of the other band: draw it in pieces, one per
+        // column it borders, each only where that column is open, and each ending exactly on the other band's
+        // column boundaries, so the two sides share their vertices (no cracks, no overlapping faces)
         const [a, z] = S.overlap(r, c, r2);
-        let open = false;
-        for (let c2 = a; c2 <= z && !open; c2++) open = exposed(get(r2, c2, y));
-        if (!open) continue;
-        const e = dr > 0 ? r + 1 : r;
-        corner(e, c, n, y, anchor, q[0]); corner(e, c + 1, n, y, anchor, q[1]);
-        corner(e, c + 1, n, y + 1, anchor, q[2]); corner(e, c, n, y + 1, anchor, q[3]);
-        quad(q, pal[1], 0.85 * jit);
+        for (let c2 = a; c2 <= z; c2++) {
+          if (!exposed(get(r2, c2, y))) continue;
+          const t0 = Math.max(c, c2 * n / n2), t1 = Math.min(c + 1, (c2 + 1) * n / n2);
+          if (t1 - t0 < 1e-9) continue;
+          corner(e, t0, n, y, anchor, q[0]); corner(e, t1, n, y, anchor, q[1]);
+          corner(e, t1, n, y + 1, anchor, q[2]); corner(e, t0, n, y + 1, anchor, q[3]);
+          quad(q, pal[1], 0.85 * jit);
+        }
       }
     }
   }
