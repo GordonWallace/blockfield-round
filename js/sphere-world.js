@@ -17,6 +17,11 @@ COL[B.SAND] = [0xdbcf9a, 0xdbcf9a]; COL[B.WATER] = [0x2f5fc4, 0x2f5fc4]; COL[B.S
 COL[B.ICE] = [0xa9c8f0, 0xa9c8f0]; COL[B.GRAVEL] = [0x8a8580, 0x8a8580]; COL[B.SANDSTONE] = [0xd2c088, 0xc9b47c];
 COL[B.BEDROCK] = [0x3a3a3a, 0x3a3a3a]; COL[B.PLANKS] = [0xb08850, 0xa07a45]; COL[B.RED_SAND] = [0xbe6a32, 0xbe6a32];
 COL[B.TERRACOTTA] = [0x9a5a3e, 0x9a5a3e];
+COL[B.LOG] = [0x9a7a4a, 0x5e4426]; COL[B.LEAVES] = [0x4a8a2a, 0x4a8a2a]; COL[B.BIRCH_LOG] = [0xc8b07a, 0xd9d6cc];
+COL[B.SPRUCE_LOG] = [0x6e5434, 0x3e2c1a]; COL[B.SPRUCE_LEAVES] = [0x3a5e3a, 0x3a5e3a]; COL[B.JUNGLE_LOG] = [0x9a7a40, 0x5a4a22];
+COL[B.JUNGLE_LEAVES] = [0x3a9a24, 0x3a9a24]; COL[B.ACACIA_LOG] = [0xb0603a, 0x6a6460]; COL[B.ACACIA_LEAVES] = [0x7a8a2a, 0x7a8a2a];
+COL[B.BIRCH_LEAVES] = [0x6a9a4a, 0x6a9a4a]; COL[B.DARK_LEAVES] = [0x2f5a1c, 0x2f5a1c]; COL[B.CHERRY_LEAVES] = [0xf0b8d0, 0xf0b8d0];
+COL[B.MANGROVE_LEAVES] = [0x4a7a2a, 0x4a7a2a]; COL[B.CACTUS] = [0x5a8a3a, 0x4a7a2e];
 const rgb = (c) => [(c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255];
 const COLF = COL.map((p) => p && [rgb(p[0]), rgb(p[1])]);
 const GRASS = BF.climate.GRASS;
@@ -51,6 +56,14 @@ const chunks = new Map();     // key -> { cr, cc, n, blocks, mesh, anchor }
 let viewDist = 12;            // chunks
 const ckey = (cr, cc) => cr * 65536 + cc;
 
+// The terrain of the column whose centre points along d, with rivers and lakes carved in. The river network
+// (rivers.js) is solved on the cube-sphere's lattice, so it is looked up through the cube-sphere grid; it
+// is only a source of river shapes here, and nothing else about that grid is used.
+const gtmp = {};
+function column(d) {
+  BF.planet.fromDir(d[0], d[1], d[2], gtmp);
+  return T.surface(gtmp.f, gtmp.u, gtmp.v, d);
+}
 // The block column at row r, column c: sampled once at its centre.
 function genChunk(cr, cc) {
   const n = S.cols(cr * CS), blocks = new Uint8Array(CS * CS * H), top = new Int16Array(CS * CS), biome = new Uint8Array(CS * CS);
@@ -58,12 +71,58 @@ function genChunk(cr, cc) {
   for (let i = 0; i < CS; i++) for (let j = 0; j < CS; j++) {
     const r = cr * CS + i, c = cc * CS + j;
     S.dir(S.latOf(r + 0.5), S.lonOf(c + 0.5, n), d);
-    const s = T.sample(d[0], d[1], d[2]), h = s.h, base = i * CS + j;
+    const s = column(d), h = s.h, base = i * CS + j, wl = Math.max(SEA, s.wl);
     for (let y = 0; y <= h; y++) blocks[y * CS * CS + base] = y <= 1 ? B.BEDROCK : y < h - 3 ? B.STONE : y < h ? s.sub : s.top;
-    for (let y = h + 1; y <= SEA; y++) blocks[y * CS * CS + base] = s.ice && y === SEA ? B.ICE : B.WATER;
+    for (let y = h + 1; y <= wl; y++) blocks[y * CS * CS + base] = s.ice && y === wl ? B.ICE : B.WATER;
     top[base] = h; biome[base] = s.biome;
   }
-  return { cr, cc, n, blocks, top, biome, mesh: null, anchor: null, dirty: true };
+  const ch = { cr, cc, n, blocks, top, biome, mesh: null, anchor: null, dirty: true };
+  plantTrees(ch);
+  return ch;
+}
+
+// ---- trees: one chance per 4 x 4 cell of a band (climate.js TREES), shapes from flora.js ----
+// A tree's blocks are laid out by row (north) and column (east), as on a flat world. Trees whose blocks would
+// reach across a band seam are left out, so a tree is never cut by the brick offset; across the column wrap
+// at 180 degrees the column number simply wraps.
+const CELL = 4, REACH = 6, treeCache = new Map();
+let treeNoise = null;
+function treeAt(ci, cj, n) {
+  const k = ci * 262144 + cj;
+  if (treeCache.has(k)) return treeCache.get(k);
+  if (treeCache.size > 100000) treeCache.clear();
+  if (!treeNoise) treeNoise = BF.makeNoise(seed ^ 0x68e31da4);
+  const h = (s) => treeNoise.hash(ci, cj, s);
+  const r = ci * CELL + Math.floor(h(1) * CELL), c = cj * CELL + Math.floor(h(2) * CELL), bd = S.band(r);
+  let t = null;
+  if (r - REACH >= bd.k0 * CS && r + REACH < bd.k1 * CS && S.cols(r) === n) {
+    const d = S.dir(S.latOf(r + 0.5), S.lonOf(c + 0.5, n)), s = column(d);
+    const TR = BF.climate.TREES[s.biome];
+    if (TR && TR.kinds.length && h(3) < TR.d && s.h > SEA && !s.river && !(s.wl > s.h)) {
+      const kind = TR.kinds[Math.floor(h(4) * TR.kinds.length)];
+      const ok = kind === "cactus" ? s.top === B.SAND || s.top === B.RED_SAND : s.top === B.GRASS || s.top === B.SNOW;
+      if (ok) t = { r, c, y: s.h + 1, blocks: BF.flora.shape(kind, h) };
+    }
+  }
+  treeCache.set(k, t);
+  return t;
+}
+function plantTrees(ch) {
+  const r0 = ch.cr * CS, c0 = ch.cc * CS, n = ch.n, ncell = n / CELL, SL = CS * CS, blk = ch.blocks;
+  for (let ci = Math.floor((r0 - REACH) / CELL); ci <= Math.floor((r0 + CS + REACH) / CELL); ci++) {
+    if (ci < 0 || ci * CELL >= S.ROWS || S.cols(ci * CELL) !== n) continue;
+    for (let cj0 = Math.floor((c0 - REACH) / CELL); cj0 <= Math.floor((c0 + CS + REACH) / CELL); cj0++) {
+      const cj = ((cj0 % ncell) + ncell) % ncell, t = treeAt(ci, cj, n);
+      if (!t) continue;
+      const tc = t.c + (cj0 - cj) * CELL, bl = t.blocks;   // unwrapped column, next to this chunk
+      for (let k = 0; k < bl.length; k += 4) {
+        const j = tc + bl[k] - c0, i = t.r + bl[k + 2] - r0, y = t.y + bl[k + 1];
+        if (j < 0 || j >= CS || i < 0 || i >= CS || y >= H - 1) continue;
+        const idx = y * SL + i * CS + j, b = bl[k + 3], cur = blk[idx];
+        if (cur === B.AIR || (!BF.flora.isLeaves(b) && BF.flora.isLeaves(cur))) { blk[idx] = b; if (y > ch.top[i * CS + j]) ch.top[i * CS + j] = y; }
+      }
+    }
+  }
 }
 function chunk(cr, cc) {
   const k = ckey(cr, cc);

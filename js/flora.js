@@ -96,7 +96,7 @@ const isLeaves = (b) => LEAVES.has(b);
 
 // Called by world.js for every new chunk, before villages: writes the parts of nearby trees inside it.
 BF.flora = {
-  tree,
+  tree, shape, isLeaves, REACH,
   decorate(c) {
     const u0 = c.cx * CS, v0 = c.cz * CS, f = c.f, g = { f: 0, u: 0, v: 0 }, blk = c.blocks, SL = CS * CS;
     const c0 = Math.floor((u0 - REACH) / CELL), c1 = Math.floor((u0 + CS + REACH) / CELL);
