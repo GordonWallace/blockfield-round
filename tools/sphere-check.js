@@ -6,8 +6,8 @@
 // Usage: node tools/sphere-check.js [pairs, default 2000]
 const path = require("path");
 global.window = global;
-for (const f of ["noise", "planet", "sphere"]) require(path.join(__dirname, "..", "js", f + ".js"));
-const S = BF.sphere, P = BF.planet, DEG = 180 / Math.PI;
+for (const f of ["noise", "planet", "sphere", "sphere-path"]) require(path.join(__dirname, "..", "js", f + ".js"));
+const S = BF.sphere, P = BF.planet, SP = BF.spherePath, DEG = 180 / Math.PI;
 const PAIRS = +(process.argv[2] || 2000);
 const n = BF.makeNoise(7);
 const randLL = (i, k) => [Math.asin(n.hash(i, k) * 2 - 1), (n.hash(i, k + 1) * 2 - 1) * Math.PI];
@@ -86,6 +86,49 @@ for (let i = 0; i < TRIPS; i++) {
   if (ax < 0.05 && Math.abs(la1) < 1.4) { blkLo = Math.min(blkLo, crossed / walked); blkHi = Math.max(blkHi, crossed / walked); }
 }
 console.log(`2: ${TRIPS} straight walks of 200-3,200 blocks: the walk ends a great-circle distance from the start equal to the distance walked, within ${(worstWalk * 100).toExponential(1)}%; walking along a row or column crosses ${blkLo.toFixed(3)}-${blkHi.toFixed(3)} blocks per block`);
+
+// ---- 2 again, for things that find their way (villagers, mobs): A* over blocks, each step costing the real
+// distance between block centres, then pulled tight along great circles. On open ground the path is as long
+// as the great circle; round a wall it is the shortest way round ----
+{
+  const cases = [];
+  // across a seam: a row on each side of the first seam north of 30 degrees
+  const sb = S.bands.find((B) => S.latOf(B.k0 * 16) > 0.5), sr = sb.k0 * 16;
+  cases.push(["across a band seam, diagonally", sr - 120, 1000, sr + 120, 1150]);
+  cases.push(["at the equator, east-west", S.ROWS / 2 - 3, 5000, S.ROWS / 2 + 3, 5300]);
+  cases.push(["round the date line (column wrap)", S.ROWS / 2 + 4000, S.cols(S.ROWS / 2 + 4000) - 100, S.ROWS / 2 + 4100, 100]);
+  const s80 = S.band(Math.round((80 / 180 + 0.5) * S.ROWS)).k1 * 16;   // the seam just north of 80 degrees
+  cases.push(["across a seam at 80 degrees", s80 - 150, 300, s80 + 150, 520]);
+  const rp = S.ROWS - 200;   // 200 blocks from the north pole, among the polar wedges
+  cases.push(["over the north pole", rp, 0, rp, Math.floor(S.cols(rp) / 2)]);
+  let worst = 0;
+  const lines = [];
+  for (const [name, r0, c0, r1, c1] of cases) {
+    const a = S.toLatLon(r0 + 0.5, c0 + 0.5), b = S.toLatLon(r1 + 0.5, c1 + 0.5), gc = S.distance(a.lat, a.lon, b.lat, b.lon);
+    const raw = SP.astar(r0, c0, r1, c1), tight = SP.smooth(raw);
+    check(raw, name + ": no path");
+    if (!raw) continue;
+    const lr = SP.length(raw), lt = SP.length(tight);
+    worst = Math.max(worst, lt / gc - 1);
+    check(lt / gc - 1 < 1e-6, `${name}: pulled-tight path ${lt.toFixed(2)} vs great circle ${gc.toFixed(2)}`);
+    lines.push(`   ${name}: great circle ${gc.toFixed(1)}, block path ${lr.toFixed(1)} (+${((lr / gc - 1) * 100).toFixed(1)}%), pulled tight ${lt.toFixed(1)}`);
+  }
+  // round a wall: a wall 200 blocks long across the straight line; the shortest way round is via one end
+  const r0 = S.ROWS / 2 + 30000, c0 = 2000, r1 = r0 + 200, c1 = c0;
+  const wallR = r0 + 100, n = S.cols(wallR), wc0 = c0 - 100, wc1 = c0 + 100;
+  const walk = (r, c) => !(r === wallR && c >= wc0 && c <= wc1);
+  const raw = SP.astar(r0, c0, r1, c1, walk), tight = SP.smooth(raw, walk);
+  check(raw, "wall: no path");
+  if (raw) {
+    // expected: the two great circles from start to the wall's end corner and on to the goal
+    const P0 = S.toLatLon(r0 + 0.5, c0 + 0.5), P1 = S.toLatLon(r1 + 0.5, c1 + 0.5);
+    const best = Math.min(...[[wallR, wc0 - 1], [wallR, wc1 + 1]].map(([r, c]) => { const q = S.toLatLon(r + 0.5, c + 0.5); return S.distance(P0.lat, P0.lon, q.lat, q.lon) + S.distance(q.lat, q.lon, P1.lat, P1.lon); }));
+    const lt = SP.length(tight);
+    check(Math.abs(lt / best - 1) < 0.01, `wall: ${lt} vs ${best}`);
+    lines.push(`   round a 200-block wall: straight ${S.distance(P0.lat, P0.lon, P1.lat, P1.lon).toFixed(1)}, shortest way round via the wall's end ${best.toFixed(1)}, pulled-tight path ${lt.toFixed(1)}`);
+  }
+  console.log(`2 (paths): A* over blocks, then pulled tight along great circles; on open ground within ${(worst * 100).toExponential(1)}% of the great circle\n${lines.join("\n")}`);
+}
 
 // ---- comparison: the cube-sphere moves in grid blocks, which are 0.71-1.0 of a real block ----
 let cubeLo = 9, cubeHi = 0, sphLo = 9, sphHi = 0;
