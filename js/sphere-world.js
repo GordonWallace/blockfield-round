@@ -510,6 +510,7 @@ function view() {
   const p = player.p, rr = R + (player.y + EYE - SEA), eye = [p[0] * rr, p[1] * rr, p[2] * rr];
   for (const ch of chunks.values()) if (ch.mesh) ch.mesh.position.set(ch.anchor[0] - eye[0], ch.anchor[1] - eye[1], ch.anchor[2] - eye[2]);
   if (globe.mesh) globe.mesh.position.set(-eye[0], -eye[1], -eye[2]);
+  BF.smobs.place(eye);
   if (skirt.mesh) { const a = skirt.mesh.userData.anchor; skirt.mesh.position.set(a[0] - eye[0], a[1] - eye[1], a[2] - eye[2]); }
   const h = player.y - SEA, alt = Math.max(0, player.y - groundY());
   const horizon = Math.sqrt(Math.max(1, h) * (2 * R + Math.max(1, h)));
@@ -548,7 +549,17 @@ function hud(st) {
     `in space: x ${fmt(P[0], 1)}  y ${fmt(P[1], 1)}  z ${fmt(P[2], 1)}  (blocks from the planet's centre; +y is the north pole)  ·  cell ${Math.floor(P[0])}, ${Math.floor(P[1])}, ${Math.floor(P[2])}\n` +
     `since ${m ? ll(m.lat, m.lon) : "-"}: walked ${fmt(player.travelled, 1)} blocks, straight line on the sphere ${fmt(straight, 1)} (M marks here)\n` +
     `${fps} fps  ·  view ${viewDist} chunks  ·  ` + (chunksOn ? `${st.meshed}/${st.wanted} chunks` : "no chunks (blocks below are under a pixel)") +
-    (globe.mesh ? "" : `  ·  building globe ${Math.round(100 * globe.row / GH)}%`);
+    (globe.mesh ? "" : `  ·  building globe ${Math.round(100 * globe.row / GH)}%`) + "\n" +
+    sheepLine();
+}
+
+function sheepLine() {
+  const sh = BF.smobs.sheep;
+  if (!sh.length) return "no sheep (K spawns some)";
+  let near = null, best = Infinity;
+  for (const s of sh) { const d = R * Math.acos(Math.min(1, dot(s.p, player.p))); if (d < best) { best = d; near = s; } }
+  return `${sh.length} sheep (K adds, L ${BF.smobs.wheat() ? "puts the wheat away" : "holds wheat"})  ·  nearest ${fmt(best, 1)} blocks away, ` +
+    (near.path && near.path.length ? `walking a ${fmt(near.planned, 1)}-block path` : "standing") + `, ${fmt(near.walked, 1)} blocks walked so far`;
 }
 
 // ---- input ----
@@ -557,6 +568,8 @@ addEventListener("keydown", (e) => {
   player.keys[e.code] = true;
   if (e.code === "KeyF") { player.flying = !player.flying; player.vy = 0; }
   if (e.code === "KeyG") player.fast = !player.fast;
+  if (e.code === "KeyK") BF.smobs.spawnNear(player.p, 6);
+  if (e.code === "KeyL") BF.smobs.setWheat(!BF.smobs.wheat());
   if (e.code === "KeyM") { const [lat, lon] = llOf(player.p); player.mark = { lat, lon }; player.travelled = 0; }
   if (e.code === "KeyT") { const n = BF.makeNoise(Date.now() & 0xffff); for (let i = 0; i < 2000; i++) { const lat = Math.asin(n.hash(i, 1) * 2 - 1), lon = (n.hash(i, 2) * 2 - 1) * Math.PI, d = S.dir(lat, lon); if (T.sample(d[0], d[1], d[2]).h > SEA + 1) { goTo(lat, lon); break; } } }
   if (e.code === "KeyP") {
@@ -610,6 +623,7 @@ function frame(now) {
   if (!started) return;
   frames++; fpsT += dt; if (fpsT >= 0.5) { fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
   update(dt);
+  BF.smobs.update(dt);
   globeStep();
   skirtStep();
   const st = updateChunks();
@@ -622,6 +636,7 @@ function start() {
   T = BF.makeTerrain(seed);
   $("title").style.display = "none";
   spawn();
+  BF.smobs.spawnNear(player.p, 8);
   started = true;
   renderer.domElement.requestPointerLock();
 }

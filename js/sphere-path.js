@@ -42,8 +42,9 @@ function heap() {
 }
 
 // Shortest path of blocks from (r0, c0) to (r1, c1), stepping only on blocks walkable(r, c) allows.
+// canStep(r, c, r2, c2), if given, can also refuse a single step (a climb too high, say).
 // Returns [[r, c], ...] or null (no path within maxNodes expanded).
-function astar(r0, c0, r1, c1, walkable = () => true, maxNodes = 400000) {
+function astar(r0, c0, r1, c1, walkable = () => true, maxNodes = 400000, canStep = null) {
   const goal = centre(r1, c1), gk = key(r1, c1);
   const g = new Map(), from = new Map(), open = heap(), done = new Set();
   const h = (r, c) => { const p = centre(r, c); return S.distance(p.lat, p.lon, goal.lat, goal.lon); };
@@ -58,7 +59,7 @@ function astar(r0, c0, r1, c1, walkable = () => true, maxNodes = 400000) {
     const r = Math.floor(k / 1048576), c = k % 1048576, pc = centre(r, c), gk0 = g.get(k);
     for (const [r2, c2] of neighbours(r, c)) {
       const k2 = key(r2, c2);
-      if (done.has(k2) || !walkable(r2, c2)) continue;
+      if (done.has(k2) || !walkable(r2, c2) || (canStep && !canStep(r, c, r2, c2))) continue;
       const q = centre(r2, c2), ng = gk0 + S.distance(pc.lat, pc.lon, q.lat, q.lon);
       if (ng < (g.has(k2) ? g.get(k2) : Infinity)) { g.set(k2, ng); from.set(k2, k); open.push(ng + S.distance(q.lat, q.lon, goal.lat, goal.lon), k2); }
     }

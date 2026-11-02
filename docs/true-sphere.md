@@ -88,8 +88,12 @@ divided by speed, exactly.
   - a middle-distance terrain disc between the loaded chunks and the globe;
   - a whole-planet globe for high views;
   - P to teleport to any latitude and longitude (try 89.99N 0E to see a pole);
-  - M to mark a spot and compare the distance walked with the straight-line distance on the sphere.
-- **What it doesn't have:** rivers, trees, houses, sheep, textures, saving, and the cube-sphere's distant
+  - M to mark a spot and compare the distance walked with the straight-line distance on the sphere;
+  - trees by biome (Blockfield's shapes, laid out by row and column, never across a seam) and rivers and
+    lakes carved in from the existing river network;
+  - sheep (`js/sphere-mobs.js`) that stand on the blocks, wander, and follow you when you hold wheat (L),
+    finding their way with the A* above and walking along great circles at a fixed real speed. K adds more.
+- **What it doesn't have:** villages, other mobs, textures, saving, and the cube-sphere's distant
   stand-ins.
 
 ## Trade-offs against the cube-sphere
@@ -131,6 +135,7 @@ unfolding) as well as add it, but that estimate is not measured.
 
 - `js/sphere.js`: the grid, the bands and all the conversions.
 - `js/sphere-path.js`: A* and path tightening.
+- `js/sphere-mobs.js`: sheep.
 - `js/sphere-world.js`: chunks, meshing, physics, the middle-distance disc, the globe and the HUD.
 - `sphere.html`: the page.
 - `tools/sphere-check.js`: the checks quoted above.

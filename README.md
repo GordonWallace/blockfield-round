@@ -11,7 +11,8 @@ into columns, so every block is within 3% of square and a trip takes exactly as 
 Every point can be given as latitude and longitude, as a block, or as x, y, z in space around the planet's
 centre. The method, the numbers and what a port into Blockfield would involve are in
 [docs/true-sphere.md](docs/true-sphere.md). WASD, Space, Ctrl, F fly, G fast fly, P go to a latitude and
-longitude, M mark a spot (the HUD compares the distance walked with the straight line), + / - view distance.
+longitude, M mark a spot (the HUD compares the distance walked with the straight line), K add sheep, L hold wheat
+(sheep within 16 blocks follow), + / - view distance.
 
 ## The planet
 
@@ -175,5 +176,6 @@ wheat, and + / - change the view distance (it starts at the largest, 32 chunks).
 | `js/sphere.js` | True sphere: latitude rows, bands of columns, conversions between lat/lon, blocks and x, y, z |
 | `js/sphere-path.js` | True sphere: A* over blocks with real-distance costs, pulled tight along great circles |
 | `js/sphere-world.js` | True sphere viewer: chunks, meshing, movement in real space, middle-distance disc, globe, HUD |
+| `js/sphere-mobs.js` | True sphere sheep: standing on blocks, wandering and following with A* over the sphere grid |
 | `sphere.html` | The true sphere page |
 | `tools/sphere-check.js` | `node tools/sphere-check.js`: block sizes, conversions, straight walks, paths, and the cube-sphere comparison |
