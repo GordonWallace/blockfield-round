@@ -207,6 +207,16 @@ function collides(p, y) {
   }
   return false;
 }
+// Moves the player to direction q, counting the distance and carrying the facing along.
+function moveTo(q) {
+  const p = player.p;
+  // distance along the ground (at sea level), the honest measure of a trip
+  player.travelled += R * Math.acos(Math.min(1, dot(p, q)));
+  // carry the facing along the great circle (parallel transport), so straight ahead stays straight
+  const k = dot(player.h, q), w = 1 + dot(p, q);
+  player.p = q; player.h = [player.h[0] - (p[0] + q[0]) * k / w, player.h[1] - (p[1] + q[1]) * k / w, player.h[2] - (p[2] + q[2]) * k / w];
+  retangent();
+}
 function update(dt) {
   const K = player.keys, p = player.p;
   const fw = (K.KeyW ? 1 : 0) - (K.KeyS ? 1 : 0), st = (K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0);
@@ -217,15 +227,22 @@ function update(dt) {
   let m = [player.h[0] * fw + right[0] * st, player.h[1] * fw + right[1] * st, player.h[2] * fw + right[2] * st];
   const ml = Math.hypot(...m);
   if (ml > 0) {
-    m = [m[0] / ml, m[1] / ml, m[2] / ml];
-    const s = speed * dt, q = along(p, m, s, R + (player.y - SEA));
-    if (player.flying && alt > 40 || !collides(q, player.y)) {
-      // distance along the ground (at sea level), the honest measure of a trip
-      player.travelled += R * Math.acos(Math.min(1, dot(p, q)));
-      // carry the facing along the great circle (parallel transport), so straight ahead stays straight
-      const k = dot(player.h, q);
-      player.p = q; player.h = [player.h[0] - (p[0] + q[0]) * k / (1 + dot(p, q)), player.h[1] - (p[1] + q[1]) * k / (1 + dot(p, q)), player.h[2] - (p[2] + q[2]) * k / (1 + dot(p, q))];
-      retangent();
+    const s = speed * dt, free = player.flying && alt > 40;
+    // Try the move; blocked, step up a one-block rise (auto-jump) when on the ground; still blocked, slide
+    // along the wall: try the move's east-west and north-south parts on their own.
+    const tryMove = (dir, len) => {
+      const l = Math.hypot(...dir);
+      if (l < 1e-9) return false;
+      const d = [dir[0] / l, dir[1] / l, dir[2] / l], q = along(player.p, d, len, R + (player.y - SEA));
+      if (free || !collides(q, player.y)) { moveTo(q); return true; }
+      if (!player.flying && player.onGround && !collides(player.p, player.y + 1.01) && !collides(q, player.y + 1.01)) {
+        player.y = Math.floor(player.y) + 1; moveTo(q); return true;
+      }
+      return false;
+    };
+    if (!tryMove(m, s)) {
+      const e = norm(cross([0, 1, 0], p)), nn = cross(p, e), me = dot(m, e) / ml, mn = dot(m, nn) / ml;
+      if (!tryMove(e.map((v) => v * me), s * Math.abs(me))) tryMove(nn.map((v) => v * mn), s * Math.abs(mn));
     }
   }
   if (player.flying) {
@@ -481,6 +498,6 @@ $("play").addEventListener("click", start);
 addEventListener("resize", resize);
 resize();
 requestAnimationFrame(frame);
-BF.sworld = { start, goTo, teleport, player, chunks, get, set, renderer, scene, camera, globe, along, update,
+BF.sworld = { start, goTo, look, teleport, player, chunks, get, set, renderer, scene, camera, globe, along, update,
   setView: (v) => { viewDist = v; }, state: () => ({ chunksOn }) };
 })();
