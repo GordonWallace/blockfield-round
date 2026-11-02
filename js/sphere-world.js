@@ -375,12 +375,83 @@ function globeStep() {
   }
 }
 
+// ---- skirt: middle-distance terrain between the loaded chunks and the globe ----
+// A disc of terrain centred under the player: NR rings, spaced further apart the further out they are (from just
+// inside the chunks to beyond the horizon), each NA points round, every point a terrain sample at the end of a
+// great-circle step from the centre. It is built a few rings a frame into fresh arrays and swapped in whole, when
+// the player has moved a tenth of its inner radius or the view needs a different reach.
+const NR = 56, NA = 192;
+const skirt = { mesh: null, build: null };
+function skirtWant() {
+  const h = Math.max(1, player.y - SEA), horizon = Math.sqrt(h * (2 * R + h));
+  const rin = chunksOn ? viewDist * CS * 0.7 : 24;
+  return { rin, rout: Math.min(40000, Math.max(3000, horizon * 1.4)) };
+}
+function skirtStep() {
+  const want = skirtWant();
+  const cur = skirt.mesh && skirt.mesh.userData;
+  if (!skirt.build) {
+    const moved = cur ? R * Math.acos(Math.min(1, dot(cur.c, player.p))) : Infinity;
+    const stale = !cur || moved > cur.rin * 0.1 + 2 || Math.abs(Math.log(want.rout / cur.rout)) > 0.2 || Math.abs(want.rin - cur.rin) > 8;
+    if (!stale) return;
+    const c = player.p.slice(), e = norm(Math.abs(c[1]) > 0.999 ? cross([1, 0, 0], c) : cross([0, 1, 0], c)), n = cross(c, e);
+    skirt.build = { c, e, n, rin: want.rin, rout: want.rout, ring: 0, pos: new Float32Array(NR * NA * 3), col: new Float32Array(NR * NA * 3), hgt: new Float32Array(NR * NA), rho: new Float64Array(NR) };
+  }
+  const b = skirt.build, t0 = performance.now(), v = [0, 0, 0];
+  while (b.ring < NR && performance.now() - t0 < 4) {
+    const i = b.ring++, rho = b.rin * Math.pow(b.rout / b.rin, i / (NR - 1)), a = rho / R, ca = Math.cos(a), sa = Math.sin(a);
+    // lowered further the coarser it is, so it stays under the real ground it stands for
+    const drop = 1.5 + rho * 0.004;
+    b.rho[i] = rho;
+    for (let j = 0; j < NA; j++) {
+      const th = (j / NA) * 2 * Math.PI, ct = Math.cos(th), st = Math.sin(th);
+      for (let k = 0; k < 3; k++) v[k] = b.c[k] * ca + (b.e[k] * ct + b.n[k] * st) * sa;
+      const smp = T.sample(v[0], v[1], v[2], rho < 2000), rr = R + Math.max(smp.h + 1, SEA + 0.88) - SEA - drop, o = (i * NA + j) * 3;
+      for (let k = 0; k < 3; k++) b.pos[o + k] = v[k] * rr - b.c[k] * R;
+      b.hgt[i * NA + j] = Math.max(smp.h, SEA);
+      // the colour the loaded chunks give this column's top, so the two match where they meet
+      const tb = smp.h < SEA ? (smp.ice ? B.ICE : B.WATER) : smp.top, cl = tb === B.GRASS ? GRASS[smp.biome] : (COLF[tb] || COLF[B.STONE])[0], kk = 0.92;
+      b.col[o] = cl[0] * kk; b.col[o + 1] = cl[1] * kk; b.col[o + 2] = cl[2] * kk;
+    }
+  }
+  if (b.ring < NR) return;
+  // shade by slope (light from the north-west, high), so hills and mountains read from above
+  const L = [-0.35, 0.5, 0.79];
+  for (let i = 0; i < NR; i++) for (let j = 0; j < NA; j++) {
+    const i0 = Math.max(0, i - 1), i1 = Math.min(NR - 1, i + 1), H0 = b.hgt, th = (j / NA) * 2 * Math.PI;
+    const gr = (H0[i1 * NA + j] - H0[i0 * NA + j]) / (b.rho[i1] - b.rho[i0]);
+    const gt = (H0[i * NA + (j + 1) % NA] - H0[i * NA + (j + NA - 1) % NA]) / (2 * b.rho[i] * 2 * Math.PI / NA);
+    const gx = gr * Math.cos(th) - gt * Math.sin(th), gy = gr * Math.sin(th) + gt * Math.cos(th), l = Math.hypot(gx, gy, 1);
+    const k = Math.max(0.55, Math.min(1.15, 0.3 + 0.8 * (-gx * L[0] - gy * L[1] + L[2]) / l)), o = (i * NA + j) * 3;
+    b.col[o] *= k; b.col[o + 1] *= k; b.col[o + 2] *= k;
+  }
+  if (!skirtIdx) {
+    skirtIdx = [];
+    for (let i = 0; i < NR - 1; i++) for (let j = 0; j < NA; j++) {
+      const a = i * NA + j, bb = i * NA + (j + 1) % NA, c = a + NA, d = bb + NA;
+      skirtIdx.push(a, c, d, a, d, bb);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(b.pos, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(b.col, 3));
+  g.setIndex(skirtIdx);
+  if (skirt.mesh) { scene.remove(skirt.mesh); skirt.mesh.geometry.dispose(); }
+  skirt.mesh = new THREE.Mesh(g, matGlobe);
+  skirt.mesh.frustumCulled = false;
+  skirt.mesh.userData = { c: b.c, rin: b.rin, rout: b.rout, anchor: [b.c[0] * R, b.c[1] * R, b.c[2] * R] };
+  scene.add(skirt.mesh);
+  skirt.build = null;
+}
+let skirtIdx = null;
+
 // ---- view: everything placed relative to the eye (floating origin) ----
 const bufSize = new THREE.Vector2();
 function view() {
   const p = player.p, rr = R + (player.y + EYE - SEA), eye = [p[0] * rr, p[1] * rr, p[2] * rr];
   for (const ch of chunks.values()) if (ch.mesh) ch.mesh.position.set(ch.anchor[0] - eye[0], ch.anchor[1] - eye[1], ch.anchor[2] - eye[2]);
   if (globe.mesh) globe.mesh.position.set(-eye[0], -eye[1], -eye[2]);
+  if (skirt.mesh) { const a = skirt.mesh.userData.anchor; skirt.mesh.position.set(a[0] - eye[0], a[1] - eye[1], a[2] - eye[2]); }
   const h = player.y - SEA, alt = Math.max(0, player.y - groundY());
   const horizon = Math.sqrt(Math.max(1, h) * (2 * R + Math.max(1, h)));
   const near = viewDist * CS;
@@ -481,6 +552,7 @@ function frame(now) {
   frames++; fpsT += dt; if (fpsT >= 0.5) { fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
   update(dt);
   globeStep();
+  skirtStep();
   const st = updateChunks();
   view();
   renderer.render(scene, camera);
@@ -498,6 +570,6 @@ $("play").addEventListener("click", start);
 addEventListener("resize", resize);
 resize();
 requestAnimationFrame(frame);
-BF.sworld = { start, goTo, look, teleport, player, chunks, get, set, renderer, scene, camera, globe, along, update,
+BF.sworld = { start, goTo, look, teleport, player, chunks, get, set, renderer, scene, camera, globe, skirt, along, update,
   setView: (v) => { viewDist = v; }, state: () => ({ chunksOn }) };
 })();
